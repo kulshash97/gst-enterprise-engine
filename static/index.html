@@ -32,11 +32,13 @@
     };
 
     function App() {
+      const [activeTab, setActiveTab] = useState("invoicing"); // 'invoicing' or 'reconciliation'
       const [apiKey, setApiKey] = useState("gst_EgKLOK0WOPPoQHjJ7hPJGU334kjDsvnTpVY53iyM8jc");
-      const [apiBaseUrl, setApiBaseUrl] = useState("http://127.0.0.1:8000");
+      const [apiBaseUrl, setApiBaseUrl] = useState(window.location.origin);
       const [statusMessage, setStatusMessage] = useState(null);
       const [loading, setLoading] = useState(false);
 
+      // Invoicing State
       const [docNumber, setDocNumber] = useState(`INV/2026/${Math.floor(1000 + Math.random() * 9000)}`);
       const [docDate, setDocDate] = useState(new Date().toISOString().split("T")[0]);
       const [vehicleNumber, setVehicleNumber] = useState("TS09UB1234");
@@ -68,19 +70,9 @@
       const [latestResponse, setLatestResponse] = useState(null);
       const [auditLogs, setAuditLogs] = useState([]);
 
-      const handleAddItem = () => {
-        setItems([...items, { item_name: "", hsn_code: "8471", quantity: 1, unit_price: 0 }]);
-      };
-
-      const handleRemoveItem = (index) => {
-        setItems(items.filter((_, i) => i !== index));
-      };
-
-      const handleItemChange = (index, field, value) => {
-        const updated = [...items];
-        updated[index][field] = field === "quantity" || field === "unit_price" ? Number(value) : value;
-        setItems(updated);
-      };
+      // 2B Reconciliation State
+      const [reconResult, setReconResult] = useState(null);
+      const [reconLoading, setReconLoading] = useState(false);
 
       const calculations = useMemo(() => {
         const isInterstate = supplier.state_code !== recipient.state_code;
@@ -127,7 +119,7 @@
         fetchAuditTrail();
       }, []);
 
-      const handleSubmit = async (e) => {
+      const handleSubmitInvoice = async (e) => {
         e.preventDefault();
         setLoading(true);
         setStatusMessage(null);
@@ -151,20 +143,12 @@
             body: JSON.stringify(payload)
           });
 
-          const resText = await res.text();
-          let data;
-          try {
-            data = JSON.parse(resText);
-          } catch(err) {
-            throw new Error(`Server returned non-JSON response (${res.status}): ${resText.slice(0, 150)}`);
-          }
-
+          const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to process invoice");
 
           setLatestResponse(data);
           setStatusMessage({ type: "success", text: `Invoice ${docNumber} successfully sealed & IRN created!` });
           fetchAuditTrail();
-          // Generate fresh doc number for the next invoice
           setDocNumber(`INV/2026/${Math.floor(1000 + Math.random() * 9000)}`);
         } catch (err) {
           setStatusMessage({ type: "error", text: err.message });
@@ -173,21 +157,85 @@
         }
       };
 
-      const handleDownloadPdf = (docNum) => {
-        window.open(`${apiBaseUrl}/api/v1/invoices/${encodeURIComponent(docNum)}/pdf?x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank');
+      // Run Simulated GSTR-2B Reconciliation
+      const handleRunRecon = async () => {
+        setReconLoading(true);
+        setStatusMessage(null);
+
+        // Pre-configured realistic books vs portal sample
+        const samplePurchaseRegister = [
+          { vendor_gstin: "27AAACB2212P1Z0", vendor_name: "Tata Cloud Hosting", doc_number: "TCS/26/1092", doc_date: "2026-09-02", taxable_value: 50000.0, tax_amount: 9000.0 },
+          { vendor_gstin: "36AABCR8814D1Z2", vendor_name: "Hyderabad Fiber Infra", doc_number: "HFI-8821", doc_date: "2026-09-05", taxable_value: 20000.0, tax_amount: 3600.0 },
+          { vendor_gstin: "29AABCS9912K1Z9", vendor_name: "Bangalore Logistics Corp", doc_number: "BLC/990", doc_date: "2026-09-12", taxable_value: 120000.0, tax_amount: 21600.0 },
+          { vendor_gstin: "07AAACZ1122M1Z5", vendor_name: "Delhi Office Supplies", doc_number: "DOS-402", doc_date: "2026-09-15", taxable_value: 15000.0, tax_amount: 2700.0 }
+        ];
+
+        const sampleGstr2b = [
+          // Matched with Tata Cloud (exact)
+          { ctin: "27AAACB2212P1Z0", trade_name: "Tata Cloud Hosting", inum: "TCS/26/1092", dt: "02-09-2026", txval: 50000.0, iamt: 9000.0, camt: 0.0, samt: 0.0 },
+          // Mismatch with Hyderabad Fiber (tax discrepancy)
+          { ctin: "36AABCR8814D1Z2", trade_name: "Hyderabad Fiber Infra", inum: "HFI-8821", dt: "05-09-2026", txval: 20000.0, iamt: 0.0, camt: 1500.0, samt: 1500.0 },
+          // Unrecorded 2B invoice (Vendor filed, but accountant hasn't entered in books)
+          { ctin: "33AAACL4411Q1Z3", trade_name: "Chennai Software Labs", inum: "CSL/009", dt: "20-09-2026", txval: 35000.0, iamt: 6300.0, camt: 0.0, samt: 0.0 }
+          // Notice: Bangalore Logistics & Delhi Office Supplies are MISSING from 2B (Defaulting Vendors!)
+        ];
+
+        try {
+          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-2b`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey.trim()
+            },
+            body: JSON.stringify({ purchase_register: samplePurchaseRegister, gstr2b_records: sampleGstr2b })
+          });
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.detail || "Failed to reconcile");
+
+          setReconResult(data);
+          setStatusMessage({ type: "success", text: "GSTR-2B ITC Audit complete! View categorized buckets below." });
+          fetchAuditTrail();
+        } catch (err) {
+          setStatusMessage({ type: "error", text: err.message });
+        } finally {
+          setReconLoading(false);
+        }
       };
 
       return (
         <div className="min-h-screen flex flex-col">
-          <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+          {/* Header */}
+          <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-30">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-cyan-500/20">
                 A
               </div>
               <div>
                 <h1 className="font-bold text-lg leading-none tracking-tight text-white">ApexTax Enterprise</h1>
-                <p className="text-xs text-slate-400 mt-1">Autonomous GST &amp; E-Way Bill Compliance Engine</p>
+                <p className="text-xs text-slate-400 mt-1">Autonomous Outward Invoicing &amp; GSTR-2B ITC Reconciliation</p>
               </div>
+            </div>
+
+            {/* Navigation Tabs */}
+            <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+              <button
+                onClick={() => setActiveTab("invoicing")}
+                className={`px-4 py-1.5 text-xs font-semibold rounded-md transition ${
+                  activeTab === 'invoicing' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Tax Invoicing &amp; IRN
+              </button>
+              <button
+                onClick={() => setActiveTab("reconciliation")}
+                className={`px-4 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'reconciliation' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>GSTR-2B ITC Matcher</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              </button>
             </div>
 
             <div className="flex items-center gap-2">
@@ -207,367 +255,449 @@
             </div>
           )}
 
-          <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 space-y-6">
-              <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                  <div>
-                    <h2 className="text-base font-semibold text-white">Create Statutory Invoice</h2>
-                    <p className="text-xs text-slate-400">NIC INV-01 compliant schema with live interstate detection</p>
-                  </div>
-                  <span className="text-xs font-medium px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono">
-                    {docNumber}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Invoice Number</label>
-                    <input
-                      type="text"
-                      value={docNumber}
-                      onChange={(e) => setDocNumber(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 font-mono outline-none"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Invoice Date</label>
-                    <input
-                      type="date"
-                      value={docDate}
-                      onChange={(e) => setDocDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 outline-none"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Vehicle No. (Part-B)</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. TS09UB1234"
-                      value={vehicleNumber}
-                      onChange={(e) => setVehicleNumber(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 font-mono outline-none uppercase"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 pt-2">
-                  <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
-                    <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider block">Supplier (From)</span>
-                    <input
-                      type="text"
-                      placeholder="Legal Name"
-                      value={supplier.legal_name}
-                      onChange={(e) => setSupplier({ ...supplier, legal_name: e.target.value })}
-                      className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
-                    />
-                    <div className="grid grid-cols-3 gap-2">
-                      <input
-                        type="text"
-                        placeholder="GSTIN"
-                        value={supplier.gstin}
-                        onChange={(e) => setSupplier({ ...supplier, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                        className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
-                      />
-                      <input
-                        type="text"
-                        placeholder="State"
-                        value={supplier.state_code}
-                        readOnly
-                        className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
-                    <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider block">Recipient (Billed To)</span>
-                    <input
-                      type="text"
-                      placeholder="Legal Name"
-                      value={recipient.legal_name}
-                      onChange={(e) => setRecipient({ ...recipient, legal_name: e.target.value })}
-                      className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
-                    />
-                    <div className="grid grid-cols-3 gap-2">
-                      <input
-                        type="text"
-                        placeholder="GSTIN"
-                        value={recipient.gstin}
-                        onChange={(e) => setRecipient({ ...recipient, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                        className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
-                      />
-                      <input
-                        type="text"
-                        placeholder="State"
-                        value={recipient.state_code}
-                        readOnly
-                        className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
-                      />
-                    </div>
-                    <input
-                      type="email"
-                      placeholder="Billing Email"
-                      value={recipient.email}
-                      onChange={(e) => setRecipient({ ...recipient, email: e.target.value })}
-                      className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3 pt-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Line Items &amp; HSN</label>
-                    <button
-                      type="button"
-                      onClick={handleAddItem}
-                      className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1"
-                    >
-                      + Add Item
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    {items.map((item, idx) => (
-                      <div key={idx} className="grid grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800 items-center">
-                        <div className="col-span-5">
-                          <input
-                            type="text"
-                            placeholder="Description"
-                            value={item.item_name}
-                            onChange={(e) => handleItemChange(idx, "item_name", e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white outline-none"
-                            required
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <input
-                            type="text"
-                            placeholder="HSN"
-                            value={item.hsn_code}
-                            onChange={(e) => handleItemChange(idx, "hsn_code", e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono outline-none"
-                            required
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <input
-                            type="number"
-                            placeholder="Qty"
-                            value={item.quantity}
-                            onChange={(e) => handleItemChange(idx, "quantity", e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono outline-none text-right"
-                            min="1"
-                            required
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <input
-                            type="number"
-                            placeholder="Rate Rs."
-                            value={item.unit_price}
-                            onChange={(e) => handleItemChange(idx, "unit_price", e.target.value)}
-                            className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono outline-none text-right"
-                            min="0"
-                            required
-                          />
-                        </div>
-                        <div className="col-span-1 text-center">
-                          {items.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="text-slate-500 hover:text-rose-400 text-sm font-bold"
-                            >
-                              &times;
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-4 space-y-2">
-                  <div className="flex justify-between text-xs text-slate-400">
-                    <span>Taxable Subtotal:</span>
-                    <span className="font-mono text-slate-200">Rs. {calculations.taxableTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                  </div>
-
-                  {calculations.isInterstate ? (
-                    <div className="flex justify-between text-xs text-purple-300">
-                      <span>Interstate IGST:</span>
-                      <span className="font-mono">Rs. {calculations.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex justify-between text-xs text-cyan-300">
-                        <span>Central GST (CGST):</span>
-                        <span className="font-mono">Rs. {calculations.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                      <div className="flex justify-between text-xs text-blue-300">
-                        <span>State GST (SGST):</span>
-                        <span className="font-mono">Rs. {calculations.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      </div>
-                    </>
-                  )}
-
-                  <div className="border-t border-slate-800 pt-2 flex items-center justify-between">
+          {activeTab === "invoicing" ? (
+            /* OUTWARD INVOICING TAB */
+            <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <div className="lg:col-span-7 space-y-6">
+                <form onSubmit={handleSubmitInvoice} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                     <div>
-                      <span className="text-sm font-bold text-white block">Grand Total:</span>
-                      <span className="text-[11px] text-slate-400">
-                        {calculations.isInterstate ? "Place of Supply: Interstate" : "Place of Supply: Intrastate"}
-                      </span>
+                      <h2 className="text-base font-semibold text-white">Create Statutory Invoice</h2>
+                      <p className="text-xs text-slate-400">NIC INV-01 compliant schema with live interstate detection</p>
                     </div>
-                    <span className="text-lg font-extrabold text-cyan-400 font-mono">
-                      Rs. {calculations.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    <span className="text-xs font-medium px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono">
+                      {docNumber}
                     </span>
                   </div>
 
-                  <div className="pt-2">
-                    {calculations.ewayMandatory ? (
-                      <div className="flex items-center gap-2 text-amber-400 text-xs bg-amber-950/40 border border-amber-800/60 rounded px-2.5 py-1.5">
-                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                        <span><b>Rule 138 CGST:</b> Consignment &gt;= Rs. 50,000. Statutory E-Way Bill required.</span>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Invoice Number</label>
+                      <input
+                        type="text"
+                        value={docNumber}
+                        onChange={(e) => setDocNumber(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 font-mono outline-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Invoice Date</label>
+                      <input
+                        type="date"
+                        value={docDate}
+                        onChange={(e) => setDocDate(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 outline-none"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Vehicle No. (Part-B)</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. TS09UB1234"
+                        value={vehicleNumber}
+                        onChange={(e) => setVehicleNumber(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 font-mono outline-none uppercase"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 pt-2">
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
+                      <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider block">Supplier (From)</span>
+                      <input
+                        type="text"
+                        placeholder="Legal Name"
+                        value={supplier.legal_name}
+                        onChange={(e) => setSupplier({ ...supplier, legal_name: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
+                      />
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          placeholder="GSTIN"
+                          value={supplier.gstin}
+                          onChange={(e) => setSupplier({ ...supplier, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
+                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
+                        />
+                        <input
+                          type="text"
+                          placeholder="State"
+                          value={supplier.state_code}
+                          readOnly
+                          className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
+                      <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider block">Recipient (Billed To)</span>
+                      <input
+                        type="text"
+                        placeholder="Legal Name"
+                        value={recipient.legal_name}
+                        onChange={(e) => setRecipient({ ...recipient, legal_name: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
+                      />
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          placeholder="GSTIN"
+                          value={recipient.gstin}
+                          onChange={(e) => setRecipient({ ...recipient, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
+                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
+                        />
+                        <input
+                          type="text"
+                          placeholder="State"
+                          value={recipient.state_code}
+                          readOnly
+                          className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
+                        />
+                      </div>
+                      <input
+                        type="email"
+                        placeholder="Billing Email"
+                        value={recipient.email}
+                        onChange={(e) => setRecipient({ ...recipient, email: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 pt-2">
+                    <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">Line Items &amp; HSN</label>
+                    <div className="space-y-2">
+                      {items.map((item, idx) => (
+                        <div key={idx} className="grid grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800 items-center">
+                          <div className="col-span-5">
+                            <input
+                              type="text"
+                              value={item.item_name}
+                              onChange={(e) => {
+                                const up = [...items]; up[idx].item_name = e.target.value; setItems(up);
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white"
+                              required
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <input
+                              type="text"
+                              value={item.hsn_code}
+                              onChange={(e) => {
+                                const up = [...items]; up[idx].hsn_code = e.target.value; setItems(up);
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono"
+                              required
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <input
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => {
+                                const up = [...items]; up[idx].quantity = Number(e.target.value); setItems(up);
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right"
+                              required
+                            />
+                          </div>
+                          <div className="col-span-3">
+                            <input
+                              type="number"
+                              value={item.unit_price}
+                              onChange={(e) => {
+                                const up = [...items]; up[idx].unit_price = Number(e.target.value); setItems(up);
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right"
+                              required
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-4 space-y-2">
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>Taxable Subtotal:</span>
+                      <span className="font-mono text-slate-200">Rs. {calculations.taxableTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+
+                    {calculations.isInterstate ? (
+                      <div className="flex justify-between text-xs text-purple-300">
+                        <span>Interstate IGST:</span>
+                        <span className="font-mono">Rs. {calculations.igst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2 text-emerald-400 text-xs bg-emerald-950/40 border border-emerald-800/60 rounded px-2.5 py-1.5">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                        <span>Below Rs. 50,000 threshold. E-Way Bill optional.</span>
-                      </div>
+                      <>
+                        <div className="flex justify-between text-xs text-cyan-300">
+                          <span>Central GST (CGST):</span>
+                          <span className="font-mono">Rs. {calculations.cgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-blue-300">
+                          <span>State GST (SGST):</span>
+                          <span className="font-mono">Rs. {calculations.sgst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </>
                     )}
+
+                    <div className="border-t border-slate-800 pt-2 flex items-center justify-between">
+                      <div>
+                        <span className="text-sm font-bold text-white block">Grand Total:</span>
+                        <span className="text-[11px] text-slate-400">
+                          {calculations.isInterstate ? "Place of Supply: Interstate" : "Place of Supply: Intrastate"}
+                        </span>
+                      </div>
+                      <span className="text-lg font-extrabold text-cyan-400 font-mono">
+                        Rs. {calculations.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
                   </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-cyan-500/20 transition disabled:opacity-50 text-sm cursor-pointer"
+                  >
+                    {loading ? "Verifying & Signing with IRP..." : "Generate Compliant Invoice & Seal IRN"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="lg:col-span-5 space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 className="text-sm font-semibold text-white">Compliance Artifacts</h3>
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
+                      Live IRP Schema v1.03
+                    </span>
+                  </div>
+
+                  {latestResponse ? (
+                    <div className="space-y-4">
+                      <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                        <span className="text-xs text-slate-400 block">NIC Invoice Reference Number (IRN):</span>
+                        <div className="font-mono text-[11px] text-cyan-300 break-all bg-slate-900 p-2 rounded border border-slate-800/80 select-all">
+                          {latestResponse.compliance.irn}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">E-Way Bill Status</span>
+                          <span className="font-bold text-amber-300 font-mono text-xs">
+                            {latestResponse.compliance.eway_bill_status}
+                          </span>
+                        </div>
+                        <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Invoice Status</span>
+                          <span className="font-medium text-emerald-300 text-xs">
+                            {latestResponse.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => window.open(`${apiBaseUrl}/api/v1/invoices/${encodeURIComponent(latestResponse.doc_number)}/pdf?x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
+                        className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2.5 px-3 rounded-lg border border-cyan-500 flex items-center justify-center gap-2 text-xs transition cursor-pointer shadow-lg shadow-cyan-500/20"
+                      >
+                        <span>Download Official GST Tax Invoice (PDF)</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="py-12 text-center text-slate-500 text-xs space-y-2">
+                      <div className="w-10 h-10 border border-dashed border-slate-700 rounded-full mx-auto flex items-center justify-center text-slate-600">
+                        IRN
+                      </div>
+                      <p>Submit form to view statutory seals.</p>
+                    </div>
+                  )}
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-cyan-500/20 transition disabled:opacity-50 text-sm cursor-pointer"
-                >
-                  {loading ? "Verifying & Signing with IRP..." : "Generate Compliant Invoice & Seal IRN"}
-                </button>
-              </form>
-            </div>
+                {/* GSTR-1 Exports */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 className="text-sm font-semibold text-white">Statutory GSTR-1 Return Filing</h3>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
+                      Period: 09/2026
+                    </span>
+                  </div>
 
-            <div className="lg:col-span-5 space-y-6">
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-semibold text-white">Compliance Artifacts</h3>
-                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
-                    Live IRP Schema v1.03
-                  </span>
-                </div>
-
-                {latestResponse ? (
-                  <div className="space-y-4">
-                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
-                      <span className="text-xs text-slate-400 block">NIC Invoice Reference Number (IRN):</span>
-                      <div className="font-mono text-[11px] text-cyan-300 break-all bg-slate-900 p-2 rounded border border-slate-800/80 select-all">
-                        {latestResponse.compliance.irn}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">E-Way Bill Status</span>
-                        <span className="font-bold text-amber-300 font-mono text-xs">
-                          {latestResponse.compliance.eway_bill_status}
-                        </span>
-                      </div>
-                      <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Invoice Generation</span>
-                        <span className="font-medium text-emerald-300 text-xs">
-                          {latestResponse.status}
-                        </span>
-                      </div>
-                    </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/json?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
+                      className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
+                    >
+                      <span className="font-mono font-bold text-xs text-cyan-400">.JSON</span>
+                      <span className="text-[11px] font-medium">Portal Schema</span>
+                    </button>
 
                     <button
-                      onClick={() => handleDownloadPdf(latestResponse.doc_number)}
-                      className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2.5 px-3 rounded-lg border border-cyan-500 flex items-center justify-center gap-2 text-xs transition cursor-pointer shadow-lg shadow-cyan-500/20"
+                      type="button"
+                      onClick={() => window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/excel?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
+                      className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
                     >
-                      <span>Download Official GST Tax Invoice (PDF)</span>
+                      <span className="font-mono font-bold text-xs text-emerald-400">.XLSX</span>
+                      <span className="text-[11px] font-medium">Offline Tool Excel</span>
                     </button>
                   </div>
-                ) : (
-                  <div className="py-12 text-center text-slate-500 text-xs space-y-2">
-                    <div className="w-10 h-10 border border-dashed border-slate-700 rounded-full mx-auto flex items-center justify-center text-slate-600">
-                      IRN
-                    </div>
-                    <p>No active invoice generated yet.<br/>Submit the form to view statutory seals.</p>
+                </div>
+
+                {/* Audit Trail */}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 className="text-sm font-semibold text-white">Immutable Audit Trail</h3>
+                    <button onClick={fetchAuditTrail} className="text-xs text-cyan-400 hover:underline">Refresh</button>
                   </div>
-                )}
-              </div>
-
-              {/* Statutory GSTR-1 Exports */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-white">Statutory GSTR-1 Return Filing</h3>
-                    <p className="text-xs text-slate-400">Direct portal-ready exports (B2B, HSN Table 12, DOCS)</p>
-                  </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
-                    Period: 09/2026
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/json?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank');
-                    }}
-                    className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
-                  >
-                    <span className="font-mono font-bold text-xs text-cyan-400">.JSON</span>
-                    <span className="text-[11px] font-medium">Portal Schema</span>
-                    <span className="text-[9px] text-slate-500">Table 4 &amp; 12</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/excel?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank');
-                    }}
-                    className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
-                  >
-                    <span className="font-mono font-bold text-xs text-emerald-400">.XLSX</span>
-                    <span className="text-[11px] font-medium">Offline Tool Excel</span>
-                    <span className="text-[9px] text-slate-500">B2B, HSN, DOCS</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Audit Trail */}
-              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-semibold text-white">Immutable Audit Trail</h3>
-                  <button onClick={fetchAuditTrail} className="text-xs text-cyan-400 hover:underline">Refresh</button>
-                </div>
-
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                  {auditLogs.length > 0 ? (
-                    auditLogs.map((log) => (
-                      <div key={log.id} className="bg-slate-950 border border-slate-800 p-2.5 rounded-lg text-xs space-y-1">
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {auditLogs.map((log) => (
+                      <div key={log.id} className="bg-slate-950 border border-slate-800 p-2 rounded text-xs space-y-1">
                         <div className="flex justify-between items-center">
-                          <span className="font-semibold text-slate-200">{log.doc_number}</span>
-                          <span className="text-[10px] text-slate-500 font-mono">
-                            {new Date(log.timestamp).toLocaleTimeString()}
-                          </span>
+                          <span className="font-semibold text-slate-300">{log.doc_number}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">{new Date(log.timestamp).toLocaleTimeString()}</span>
                         </div>
                         <p className="text-[11px] text-cyan-400 font-mono">{log.event_type}</p>
                         <p className="text-[11px] text-slate-400 truncate">{log.details}</p>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-xs text-slate-500 text-center py-4">No audit logs recorded for this tenant.</p>
-                  )}
+                    ))}
+                  </div>
                 </div>
               </div>
+            </main>
+          ) : (
+            /* GSTR-2B ITC RECONCILIATION TAB */
+            <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-semibold text-white">GSTR-2B vs. Purchase Register ITC Matcher</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Automated statutory reconciliation under Section 16(2)(aa) of CGST Act</p>
+                </div>
+                <button
+                  onClick={handleRunRecon}
+                  disabled={reconLoading}
+                  className="bg-gradient-to-r from-emerald-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-semibold py-2.5 px-5 rounded-lg text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-2"
+                >
+                  {reconLoading ? "Auditing Invoices..." : "Run Simulated 2B Reconciliation"}
+                </button>
+              </div>
 
-            </div>
-          </main>
+              {reconResult ? (
+                <div className="space-y-6">
+                  {/* Summary Metric Cards */}
+                  <div className="grid grid-cols-4 gap-4">
+                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-1">
+                      <span className="text-xs text-slate-400 uppercase font-semibold block">Total Invoices Reviewed</span>
+                      <span className="text-2xl font-bold font-mono text-white">{reconResult.summary.total_purchases_reviewed}</span>
+                    </div>
+                    <div className="bg-emerald-950/40 border border-emerald-800/60 p-4 rounded-xl space-y-1">
+                      <span className="text-xs text-emerald-400 uppercase font-semibold block">Matched &amp; Eligible ITC</span>
+                      <span className="text-2xl font-bold font-mono text-emerald-300">Rs. {reconResult.summary.total_eligible_itc.toLocaleString('en-IN')}</span>
+                      <span className="text-[10px] text-emerald-500 block">{reconResult.summary.matched_count} Invoices Safe to Claim</span>
+                    </div>
+                    <div className="bg-rose-950/40 border border-rose-800/60 p-4 rounded-xl space-y-1">
+                      <span className="text-xs text-rose-400 uppercase font-semibold block">Missing in 2B (At Risk)</span>
+                      <span className="text-2xl font-bold font-mono text-rose-300">Rs. {reconResult.summary.total_at_risk_itc.toLocaleString('en-IN')}</span>
+                      <span className="text-[10px] text-rose-400 block">{reconResult.summary.missing_in_2b_count} Defaulting Vendors</span>
+                    </div>
+                    <div className="bg-amber-950/40 border border-amber-800/60 p-4 rounded-xl space-y-1">
+                      <span className="text-xs text-amber-400 uppercase font-semibold block">Rate / Value Discrepancies</span>
+                      <span className="text-2xl font-bold font-mono text-amber-300">{reconResult.summary.mismatch_count}</span>
+                      <span className="text-[10px] text-amber-400 block">Requires Credit/Debit Note</span>
+                    </div>
+                  </div>
+
+                  {/* Missing in 2B Action Box (High Value for CA / Tax Audit) */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-rose-300 flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+                          Action Required: Vendor Invoices Missing in GSTR-2B
+                        </h3>
+                        <p className="text-xs text-slate-400">These vendors have not filed their GSTR-1. Under Sec 16(2)(aa), claiming this credit leads to tax demand notices.</p>
+                      </div>
+                      <span className="text-xs font-bold text-rose-400 bg-rose-950 border border-rose-800 px-2.5 py-1 rounded">
+                        HOLD VENDOR PAYMENT
+                      </span>
+                    </div>
+
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-mono">
+                        <tr>
+                          <th className="p-3">Vendor GSTIN</th>
+                          <th className="p-3">Vendor Name</th>
+                          <th className="p-3">Invoice No</th>
+                          <th className="p-3 text-right">Taxable (Rs.)</th>
+                          <th className="p-3 text-right">ITC at Risk (Rs.)</th>
+                          <th className="p-3">Statutory Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {reconResult.missing_in_2b.map((item, i) => (
+                          <tr key={i} className="hover:bg-slate-950/40 font-mono">
+                            <td className="p-3 text-slate-300">{item.vendor_gstin}</td>
+                            <td className="p-3 font-sans font-medium text-white">{item.vendor_name}</td>
+                            <td className="p-3 text-slate-300">{item.doc_number}</td>
+                            <td className="p-3 text-right text-slate-300">{item.taxable_value.toLocaleString('en-IN')}</td>
+                            <td className="p-3 text-right font-bold text-rose-400">{item.itc_at_risk.toLocaleString('en-IN')}</td>
+                            <td className="p-3 font-sans text-rose-300 text-[11px]">{item.action}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Fully Matched Section */}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
+                    <h3 className="text-sm font-semibold text-emerald-300 flex items-center gap-2 border-b border-slate-800 pb-3">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      100% Matched &amp; Eligible for GSTR-3B Credit Claim
+                    </h3>
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-mono">
+                        <tr>
+                          <th className="p-3">Vendor GSTIN</th>
+                          <th className="p-3">Vendor Name</th>
+                          <th className="p-3">Invoice No</th>
+                          <th className="p-3 text-right">Taxable (Rs.)</th>
+                          <th className="p-3 text-right">Eligible ITC (Rs.)</th>
+                          <th className="p-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {reconResult.matched.map((item, i) => (
+                          <tr key={i} className="hover:bg-slate-950/40 font-mono">
+                            <td className="p-3 text-slate-300">{item.vendor_gstin}</td>
+                            <td className="p-3 font-sans font-medium text-white">{item.vendor_name}</td>
+                            <td className="p-3 text-slate-300">{item.doc_number}</td>
+                            <td className="p-3 text-right text-slate-300">{item.taxable_value.toLocaleString('en-IN')}</td>
+                            <td className="p-3 text-right font-bold text-emerald-400">{item.itc_claimed.toLocaleString('en-IN')}</td>
+                            <td className="p-3 font-sans text-emerald-300 text-[11px]">{item.remarks}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-500 space-y-3">
+                  <div className="w-12 h-12 border border-dashed border-slate-700 rounded-full mx-auto flex items-center justify-center text-slate-400 font-bold">
+                    2B
+                  </div>
+                  <h4 className="text-sm font-semibold text-slate-300">Ready for GSTR-2B Reconciliation</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Click the "Run Simulated 2B Reconciliation" button above to benchmark the purchase ledger against official portal ITC data.
+                  </p>
+                </div>
+              )}
+            </main>
+          )}
+
         </div>
       );
     }

@@ -5,14 +5,15 @@ import traceback
 import hashlib
 from pathlib import Path
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.database import Base, engine, get_db
@@ -23,6 +24,7 @@ from compliance.nic_schema import build_nic_standard_payload
 from services.pdf_generator import build_gst_tax_invoice_pdf
 from services.email_service import send_invoice_email_task
 from services.gstr1_exporter import generate_gstr1_json_payload, generate_gstr1_excel_workbook
+from services.reconciliation_engine import run_gstr2b_reconciliation
 
 Base.metadata.create_all(bind=engine)
 
@@ -54,7 +56,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     traceback.print_exc()
     return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {str(exc)}"})
 
-# Accepts API key from Header OR from Query Parameter (?x-api-key=...) for browser PDF/Excel downloads
 def verify_tenant(
     x_api_key_header: Optional[str] = Header(None, alias="x-api-key"),
     x_api_key_query: Optional[str] = Query(None, alias="x-api-key"),
@@ -63,7 +64,6 @@ def verify_tenant(
     key = x_api_key_header or x_api_key_query
     if not key:
         raise HTTPException(status_code=401, detail="API Key missing. Provide via 'x-api-key' header or query parameter.")
-    
     tenant = db.query(Tenant).filter(Tenant.api_key == key.strip()).first()
     if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API Key. Unauthorized access.")
@@ -281,6 +281,29 @@ def export_gstr1_excel(period: str = "092026", tenant: Tenant = Depends(verify_t
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=GSTR1_{period}.xlsx"}
     )
+
+# -------------------------------------------------------------
+# GSTR-2B AUTOMATED RECONCILIATION ROUTE
+# -------------------------------------------------------------
+class ReconciliationPayload(BaseModel):
+    purchase_register: List[Dict[str, Any]]
+    gstr2b_records: List[Dict[str, Any]]
+
+@app.post("/api/v1/compliance/reconcile-2b")
+def reconcile_itc(
+    payload: ReconciliationPayload,
+    tenant: Tenant = Depends(verify_tenant),
+    db: Session = Depends(get_db)
+):
+    results = run_gstr2b_reconciliation(payload.purchase_register, payload.gstr2b_records)
+    db.add(ComplianceAuditLog(
+        tenant_id=tenant.id,
+        event_type="GSTR2B_RECONCILIATION_PERFORMED",
+        doc_number="ITC-AUDIT",
+        details=f"Matched: {results['summary']['matched_count']} | Missing in 2B: {results['summary']['missing_in_2b_count']} | At-Risk ITC: Rs. {results['summary']['total_at_risk_itc']:,.2f}"
+    ))
+    db.commit()
+    return results
 
 @app.get("/api/v1/invoices/audit-trail")
 def get_audit(tenant: Tenant = Depends(verify_tenant), db: Session = Depends(get_db)):
