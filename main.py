@@ -3,6 +3,7 @@ import os
 import secrets
 import traceback
 import hashlib
+import io
 from pathlib import Path
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
@@ -15,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 from core.database import Base, engine, get_db
 from core.models import Tenant, Invoice, InvoiceItem, ComplianceAuditLog
@@ -283,7 +286,7 @@ def export_gstr1_excel(period: str = "092026", tenant: Tenant = Depends(verify_t
     )
 
 # -------------------------------------------------------------
-# GSTR-2B AUTOMATED RECONCILIATION ROUTE
+# GSTR-2B RECONCILIATION ROUTE & EXCEL REPORT GENERATOR
 # -------------------------------------------------------------
 class ReconciliationPayload(BaseModel):
     purchase_register: List[Dict[str, Any]]
@@ -300,10 +303,70 @@ def reconcile_itc(
         tenant_id=tenant.id,
         event_type="GSTR2B_RECONCILIATION_PERFORMED",
         doc_number="ITC-AUDIT",
-        details=f"Matched: {results['summary']['matched_count']} | Missing in 2B: {results['summary']['missing_in_2b_count']} | At-Risk ITC: Rs. {results['summary']['total_at_risk_itc']:,.2f}"
+        details=f"Matched: {results['summary']['matched_count']} | Missing: {results['summary']['missing_in_2b_count']} | At-Risk: Rs. {results['summary']['total_at_risk_itc']:,.2f}"
     ))
     db.commit()
     return results
+
+@app.post("/api/v1/compliance/reconcile-2b/excel")
+def export_reconcile_excel(
+    payload: ReconciliationPayload,
+    tenant: Tenant = Depends(verify_tenant)
+):
+    results = run_gstr2b_reconciliation(payload.purchase_register, payload.gstr2b_records)
+    
+    wb = Workbook()
+    
+    # Styles
+    h_font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
+    h_fill_blue = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    h_fill_rose = PatternFill(start_color="991B1B", end_color="991B1B", fill_type="solid")
+    h_fill_green = PatternFill(start_color="065F46", end_color="065F46", fill_type="solid")
+    regular_font = Font(name="Arial", size=9)
+    
+    # Sheet 1: Summary
+    ws_sum = wb.active
+    ws_sum.title = "Audit Summary"
+    ws_sum.append(["ApexTax Statutory GSTR-2B ITC Audit Report", "", ""])
+    ws_sum.append(["Generated On", datetime.now().strftime("%d-%m-%Y %H:%M:%S"), ""])
+    ws_sum.append([])
+    ws_sum.append(["Audit Metric", "Count", "Tax Amount (INR)"])
+    for cell in ws_sum[4]:
+        cell.font = h_font
+        cell.fill = h_fill_blue
+    
+    ws_sum.append(["Total Purchase Invoices Reviewed", results["summary"]["total_purchases_reviewed"], ""])
+    ws_sum.append(["Matched & Eligible ITC (Safe Claim)", results["summary"]["matched_count"], results["summary"]["total_eligible_itc"]])
+    ws_sum.append(["Missing in 2B (Defaulting Vendors - Hold Payment)", results["summary"]["missing_in_2b_count"], results["summary"]["total_at_risk_itc"]])
+    ws_sum.append(["Tax / Rate Discrepancies", results["summary"]["mismatch_count"], ""])
+    
+    # Sheet 2: Missing in 2B (Action Ledger)
+    ws_missing = wb.create_sheet(title="Missing in 2B - Hold Pay")
+    ws_missing.append(["Vendor GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value", "ITC at Risk", "Action"])
+    for cell in ws_missing[1]:
+        cell.font = h_font
+        cell.fill = h_fill_rose
+    for item in results["missing_in_2b"]:
+        ws_missing.append([item["vendor_gstin"], item["vendor_name"], item["doc_number"], item.get("doc_date", ""), item["taxable_value"], item["itc_at_risk"], item["action"]])
+
+    # Sheet 3: Matched & Eligible
+    ws_matched = wb.create_sheet(title="Matched - Safe ITC")
+    ws_matched.append(["Vendor GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value", "Eligible ITC", "Statutory Status"])
+    for cell in ws_matched[1]:
+        cell.font = h_font
+        cell.fill = h_fill_green
+    for item in results["matched"]:
+        ws_matched.append([item["vendor_gstin"], item["vendor_name"], item["doc_number"], item.get("doc_date", ""), item["taxable_value"], item["itc_claimed"], item["remarks"]])
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    
+    return Response(
+        content=stream.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=GSTR2B_Reconciliation_Audit.xlsx"}
+    )
 
 @app.get("/api/v1/invoices/audit-trail")
 def get_audit(tenant: Tenant = Depends(verify_tenant), db: Session = Depends(get_db)):

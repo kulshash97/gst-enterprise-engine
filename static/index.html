@@ -31,14 +31,26 @@
       "8703": 0.28,
     };
 
+    const samplePurchaseRegister = [
+      { vendor_gstin: "27AAACB2212P1Z0", vendor_name: "Tata Cloud Hosting", doc_number: "TCS/26/1092", doc_date: "2026-09-02", taxable_value: 50000.0, tax_amount: 9000.0 },
+      { vendor_gstin: "36AABCR8814D1Z2", vendor_name: "Hyderabad Fiber Infra", doc_number: "HFI-8821", doc_date: "2026-09-05", taxable_value: 20000.0, tax_amount: 3600.0 },
+      { vendor_gstin: "29AABCS9912K1Z9", vendor_name: "Bangalore Logistics Corp", doc_number: "BLC/990", doc_date: "2026-09-12", taxable_value: 120000.0, tax_amount: 21600.0 },
+      { vendor_gstin: "07AAACZ1122M1Z5", vendor_name: "Delhi Office Supplies", doc_number: "DOS-402", doc_date: "2026-09-15", taxable_value: 15000.0, tax_amount: 2700.0 }
+    ];
+
+    const sampleGstr2b = [
+      { ctin: "27AAACB2212P1Z0", trade_name: "Tata Cloud Hosting", inum: "TCS/26/1092", dt: "02-09-2026", txval: 50000.0, iamt: 9000.0, camt: 0.0, samt: 0.0 },
+      { ctin: "36AABCR8814D1Z2", trade_name: "Hyderabad Fiber Infra", inum: "HFI-8821", dt: "05-09-2026", txval: 20000.0, iamt: 0.0, camt: 1500.0, samt: 1500.0 },
+      { ctin: "33AAACL4411Q1Z3", trade_name: "Chennai Software Labs", inum: "CSL/009", dt: "20-09-2026", txval: 35000.0, iamt: 6300.0, camt: 0.0, samt: 0.0 }
+    ];
+
     function App() {
-      const [activeTab, setActiveTab] = useState("invoicing"); // 'invoicing' or 'reconciliation'
+      const [activeTab, setActiveTab] = useState("invoicing");
       const [apiKey, setApiKey] = useState("gst_EgKLOK0WOPPoQHjJ7hPJGU334kjDsvnTpVY53iyM8jc");
       const [apiBaseUrl, setApiBaseUrl] = useState(window.location.origin);
       const [statusMessage, setStatusMessage] = useState(null);
       const [loading, setLoading] = useState(false);
 
-      // Invoicing State
       const [docNumber, setDocNumber] = useState(`INV/2026/${Math.floor(1000 + Math.random() * 9000)}`);
       const [docDate, setDocDate] = useState(new Date().toISOString().split("T")[0]);
       const [vehicleNumber, setVehicleNumber] = useState("TS09UB1234");
@@ -70,7 +82,6 @@
       const [latestResponse, setLatestResponse] = useState(null);
       const [auditLogs, setAuditLogs] = useState([]);
 
-      // 2B Reconciliation State
       const [reconResult, setReconResult] = useState(null);
       const [reconLoading, setReconLoading] = useState(false);
 
@@ -157,28 +168,9 @@
         }
       };
 
-      // Run Simulated GSTR-2B Reconciliation
       const handleRunRecon = async () => {
         setReconLoading(true);
         setStatusMessage(null);
-
-        // Pre-configured realistic books vs portal sample
-        const samplePurchaseRegister = [
-          { vendor_gstin: "27AAACB2212P1Z0", vendor_name: "Tata Cloud Hosting", doc_number: "TCS/26/1092", doc_date: "2026-09-02", taxable_value: 50000.0, tax_amount: 9000.0 },
-          { vendor_gstin: "36AABCR8814D1Z2", vendor_name: "Hyderabad Fiber Infra", doc_number: "HFI-8821", doc_date: "2026-09-05", taxable_value: 20000.0, tax_amount: 3600.0 },
-          { vendor_gstin: "29AABCS9912K1Z9", vendor_name: "Bangalore Logistics Corp", doc_number: "BLC/990", doc_date: "2026-09-12", taxable_value: 120000.0, tax_amount: 21600.0 },
-          { vendor_gstin: "07AAACZ1122M1Z5", vendor_name: "Delhi Office Supplies", doc_number: "DOS-402", doc_date: "2026-09-15", taxable_value: 15000.0, tax_amount: 2700.0 }
-        ];
-
-        const sampleGstr2b = [
-          // Matched with Tata Cloud (exact)
-          { ctin: "27AAACB2212P1Z0", trade_name: "Tata Cloud Hosting", inum: "TCS/26/1092", dt: "02-09-2026", txval: 50000.0, iamt: 9000.0, camt: 0.0, samt: 0.0 },
-          // Mismatch with Hyderabad Fiber (tax discrepancy)
-          { ctin: "36AABCR8814D1Z2", trade_name: "Hyderabad Fiber Infra", inum: "HFI-8821", dt: "05-09-2026", txval: 20000.0, iamt: 0.0, camt: 1500.0, samt: 1500.0 },
-          // Unrecorded 2B invoice (Vendor filed, but accountant hasn't entered in books)
-          { ctin: "33AAACL4411Q1Z3", trade_name: "Chennai Software Labs", inum: "CSL/009", dt: "20-09-2026", txval: 35000.0, iamt: 6300.0, camt: 0.0, samt: 0.0 }
-          // Notice: Bangalore Logistics & Delhi Office Supplies are MISSING from 2B (Defaulting Vendors!)
-        ];
 
         try {
           const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-2b`, {
@@ -203,9 +195,34 @@
         }
       };
 
+      const handleDownloadReconExcel = async () => {
+        try {
+          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-2b/excel`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey.trim()
+            },
+            body: JSON.stringify({ purchase_register: samplePurchaseRegister, gstr2b_records: sampleGstr2b })
+          });
+
+          if (!res.ok) throw new Error("Failed to generate Excel report");
+
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "GSTR2B_Reconciliation_Audit.xlsx";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        } catch (err) {
+          setStatusMessage({ type: "error", text: err.message });
+        }
+      };
+
       return (
         <div className="min-h-screen flex flex-col">
-          {/* Header */}
           <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-30">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-cyan-500/20">
@@ -217,7 +234,6 @@
               </div>
             </div>
 
-            {/* Navigation Tabs */}
             <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
               <button
                 onClick={() => setActiveTab("invoicing")}
@@ -256,7 +272,6 @@
           )}
 
           {activeTab === "invoicing" ? (
-            /* OUTWARD INVOICING TAB */
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 space-y-6">
                 <form onSubmit={handleSubmitInvoice} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
@@ -311,7 +326,7 @@
                         placeholder="Legal Name"
                         value={supplier.legal_name}
                         onChange={(e) => setSupplier({ ...supplier, legal_name: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none"
                       />
                       <div className="grid grid-cols-3 gap-2">
                         <input
@@ -319,7 +334,7 @@
                           placeholder="GSTIN"
                           value={supplier.gstin}
                           onChange={(e) => setSupplier({ ...supplier, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
+                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none uppercase"
                         />
                         <input
                           type="text"
@@ -338,7 +353,7 @@
                         placeholder="Legal Name"
                         value={recipient.legal_name}
                         onChange={(e) => setRecipient({ ...recipient, legal_name: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none"
                       />
                       <div className="grid grid-cols-3 gap-2">
                         <input
@@ -346,7 +361,7 @@
                           placeholder="GSTIN"
                           value={recipient.gstin}
                           onChange={(e) => setRecipient({ ...recipient, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none focus:border-cyan-500 uppercase"
+                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none uppercase"
                         />
                         <input
                           type="text"
@@ -361,7 +376,7 @@
                         placeholder="Billing Email"
                         value={recipient.email}
                         onChange={(e) => setRecipient({ ...recipient, email: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none focus:border-cyan-500"
+                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none"
                       />
                     </div>
                   </div>
@@ -517,7 +532,6 @@
                   )}
                 </div>
 
-                {/* GSTR-1 Exports */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <h3 className="text-sm font-semibold text-white">Statutory GSTR-1 Return Filing</h3>
@@ -547,7 +561,6 @@
                   </div>
                 </div>
 
-                {/* Audit Trail */}
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-3">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                     <h3 className="text-sm font-semibold text-white">Immutable Audit Trail</h3>
@@ -569,25 +582,33 @@
               </div>
             </main>
           ) : (
-            /* GSTR-2B ITC RECONCILIATION TAB */
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl flex items-center justify-between">
                 <div>
                   <h2 className="text-base font-semibold text-white">GSTR-2B vs. Purchase Register ITC Matcher</h2>
                   <p className="text-xs text-slate-400 mt-0.5">Automated statutory reconciliation under Section 16(2)(aa) of CGST Act</p>
                 </div>
-                <button
-                  onClick={handleRunRecon}
-                  disabled={reconLoading}
-                  className="bg-gradient-to-r from-emerald-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-semibold py-2.5 px-5 rounded-lg text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-2"
-                >
-                  {reconLoading ? "Auditing Invoices..." : "Run Simulated 2B Reconciliation"}
-                </button>
+                <div className="flex items-center gap-3">
+                  {reconResult && (
+                    <button
+                      onClick={handleDownloadReconExcel}
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-400 font-semibold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>📥 Download Audit Report (.XLSX)</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleRunRecon}
+                    disabled={reconLoading}
+                    className="bg-gradient-to-r from-emerald-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-semibold py-2.5 px-5 rounded-lg text-xs shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-2"
+                  >
+                    {reconLoading ? "Auditing Invoices..." : "Run Simulated 2B Reconciliation"}
+                  </button>
+                </div>
               </div>
 
               {reconResult ? (
                 <div className="space-y-6">
-                  {/* Summary Metric Cards */}
                   <div className="grid grid-cols-4 gap-4">
                     <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-1">
                       <span className="text-xs text-slate-400 uppercase font-semibold block">Total Invoices Reviewed</span>
@@ -610,7 +631,6 @@
                     </div>
                   </div>
 
-                  {/* Missing in 2B Action Box (High Value for CA / Tax Audit) */}
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                       <div>
@@ -651,7 +671,6 @@
                     </table>
                   </div>
 
-                  {/* Fully Matched Section */}
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                     <h3 className="text-sm font-semibold text-emerald-300 flex items-center gap-2 border-b border-slate-800 pb-3">
                       <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
@@ -691,7 +710,7 @@
                   </div>
                   <h4 className="text-sm font-semibold text-slate-300">Ready for GSTR-2B Reconciliation</h4>
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    Click the "Run Simulated 2B Reconciliation" button above to benchmark the purchase ledger against official portal ITC data.
+                    Click "Run Simulated 2B Reconciliation" above to benchmark the purchase ledger against official portal ITC data.
                   </p>
                 </div>
               )}
