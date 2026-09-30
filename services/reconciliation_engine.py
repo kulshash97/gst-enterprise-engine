@@ -2,7 +2,7 @@ import re
 import json
 import io
 import pandas as pd
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 
 def normalize_doc_num(doc_no: Any) -> str:
     """Strip special characters, spaces, and leading zeros to eliminate false mismatch flags."""
@@ -11,18 +11,32 @@ def normalize_doc_num(doc_no: Any) -> str:
     cleaned = re.sub(r'[^A-Za-z0-9]', '', str(doc_no)).upper()
     return cleaned.lstrip('0')
 
-def find_column(df_columns: List[str], candidate_names: List[str]) -> str:
-    """Fuzzy-match client column headers against expected concepts."""
+def find_column(df_columns: List[str], candidate_names: List[str], exclude: List[str] = None) -> str:
+    """Fuzzy-match client column headers with exclusion rules to prevent false overlaps."""
+    exclude = exclude or []
     cleaned_candidates = [c.lower().replace(" ", "").replace("_", "") for c in candidate_names]
+    cleaned_excludes = [e.lower().replace(" ", "").replace("_", "") for e in exclude]
+
+    # 1. Exact match first
     for col in df_columns:
         normalized_col = str(col).lower().replace(" ", "").replace("_", "").replace(".", "")
-        for cand in cleaned_candidates:
+        if any(exc in normalized_col for exc in cleaned_excludes):
+            continue
+        if normalized_col in cleaned_candidates:
+            return col
+
+    # 2. Substring match
+    for cand in cleaned_candidates:
+        for col in df_columns:
+            normalized_col = str(col).lower().replace(" ", "").replace("_", "").replace(".", "")
+            if any(exc in normalized_col for exc in cleaned_excludes):
+                continue
             if cand in normalized_col:
                 return col
     return ""
 
 def parse_purchase_register_file(file_bytes: bytes, filename: str) -> List[Dict[str, Any]]:
-    """Parse Excel (.xlsx, .xls) or CSV purchase registers into a normalized schema."""
+    """Parse Excel or CSV purchase registers into a normalized schema."""
     if filename.lower().endswith(".csv"):
         df = pd.read_csv(io.BytesIO(file_bytes))
     else:
@@ -32,11 +46,13 @@ def parse_purchase_register_file(file_bytes: bytes, filename: str) -> List[Dict[
     cols = list(df.columns)
 
     gstin_col = find_column(cols, ["gstin", "vendor_gst", "supplier_gst", "ctin", "gst"])
-    name_col = find_column(cols, ["vendor", "supplier", "party", "name", "trade"])
-    inv_col = find_column(cols, ["invoice", "inv_no", "bill_no", "doc_no", "number", "inum"])
-    date_col = find_column(cols, ["date", "inv_date", "bill_date", "dt"])
-    taxable_col = find_column(cols, ["taxable", "taxable_val", "assessable", "base_val", "txval"])
-    tax_col = find_column(cols, ["tax", "total_tax", "gst_amount", "igst", "tax_amt"])
+    name_col = find_column(cols, ["vendorname", "suppliername", "partyname", "trade_name", "vendor", "supplier", "party"], exclude=["gstin", "gst"])
+    inv_col = find_column(cols, ["invoicenumber", "inv_no", "bill_no", "doc_no", "invoice", "inum"])
+    date_col = find_column(cols, ["invoicedate", "bill_date", "inv_date", "date", "dt"])
+    taxable_col = find_column(cols, ["taxablevalue", "taxable_val", "taxable", "assessable", "base_val", "txval"])
+    
+    # Strictly exclude "taxable" from tax column detection
+    tax_col = find_column(cols, ["totaltax", "taxamount", "taxamt", "gstamount", "totaltaxamount", "tax"], exclude=["taxable", "value"])
 
     records = []
     for _, row in df.iterrows():
@@ -71,7 +87,6 @@ def parse_gstr2b_json_file(file_bytes: bytes) -> List[Dict[str, Any]]:
     raw_data = json.loads(file_bytes.decode("utf-8"))
     b2b_records = []
 
-    # Handle standard GST portal JSON wrapper
     data_block = raw_data.get("data", raw_data)
     doc_data = data_block.get("docdata", data_block)
     b2b_list = doc_data.get("b2b", [])
@@ -86,7 +101,6 @@ def parse_gstr2b_json_file(file_bytes: bytes) -> List[Dict[str, Any]]:
             dt = str(inv.get("dt", "")).strip()
             val = float(inv.get("val", 0.0))
             
-            # Sum line item values
             items = inv.get("items", [])
             tot_txval = 0.0
             tot_iamt = 0.0
@@ -122,7 +136,6 @@ def run_gstr2b_reconciliation(purchase_register: List[Dict[str, Any]], gstr2b_b2
     mismatched = []
     used_2b_keys = set()
 
-    # Index 2B records by (CTIN, normalized_doc)
     lookup_2b = {}
     for idx, rec in enumerate(gstr2b_b2b_records):
         ctin = rec.get("ctin", "").strip().upper()
