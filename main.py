@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request, Body
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
@@ -27,11 +27,15 @@ from compliance.nic_schema import build_nic_standard_payload
 from services.pdf_generator import build_gst_tax_invoice_pdf
 from services.email_service import send_invoice_email_task
 from services.gstr1_exporter import generate_gstr1_json_payload, generate_gstr1_excel_workbook
-from services.reconciliation_engine import run_gstr2b_reconciliation
+from services.reconciliation_engine import (
+    run_gstr2b_reconciliation,
+    parse_purchase_register_file,
+    parse_gstr2b_json_file
+)
 
 Base.metadata.create_all(bind=engine)
 
-# Auto-seed tenant
+# Auto-seed authorized tenant
 db_init = next(get_db())
 try:
     existing_tenant = db_init.query(Tenant).filter(Tenant.api_key == "gst_EgKLOK0WOPPoQHjJ7hPJGU334kjDsvnTpVY53iyM8jc").first()
@@ -41,7 +45,7 @@ try:
 finally:
     db_init.close()
 
-app = FastAPI(title="ApexTax Enterprise GST Engine", version="2.0.0")
+app = FastAPI(title="ApexTax Enterprise GST Engine", version="2.5.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -286,11 +290,48 @@ def export_gstr1_excel(period: str = "092026", tenant: Tenant = Depends(verify_t
     )
 
 # -------------------------------------------------------------
-# GSTR-2B RECONCILIATION ROUTE & EXCEL REPORT GENERATOR
+# GSTR-2B DRAG & DROP MULTIPART FILE RECONCILIATION
 # -------------------------------------------------------------
 class ReconciliationPayload(BaseModel):
     purchase_register: List[Dict[str, Any]]
     gstr2b_records: List[Dict[str, Any]]
+
+@app.post("/api/v1/compliance/reconcile-files")
+async def reconcile_uploaded_files(
+    purchase_file: UploadFile = File(..., description="Purchase register Excel/CSV"),
+    portal_file: UploadFile = File(..., description="GST Portal GSTR-2B JSON"),
+    tenant: Tenant = Depends(verify_tenant),
+    db: Session = Depends(get_db)
+):
+    try:
+        pr_bytes = await purchase_file.read()
+        gstr2b_bytes = await portal_file.read()
+
+        purchase_records = parse_purchase_register_file(pr_bytes, purchase_file.filename)
+        portal_records = parse_gstr2b_json_file(gstr2b_bytes)
+
+        if not purchase_records:
+            raise HTTPException(status_code=400, detail="Could not extract any valid invoice rows from the purchase file. Please ensure columns include Invoice No and Taxable Value.")
+        if not portal_records:
+            raise HTTPException(status_code=400, detail="Could not extract valid B2B data from the GSTR-2B JSON file. Ensure it is an authentic portal export.")
+
+        results = run_gstr2b_reconciliation(purchase_records, portal_records)
+
+        db.add(ComplianceAuditLog(
+            tenant_id=tenant.id,
+            event_type="LIVE_FILE_RECONCILIATION",
+            doc_number=f"PR:{len(purchase_records)}_2B:{len(portal_records)}",
+            details=f"Eligible: Rs. {results['summary']['total_eligible_itc']:,.2f} | At-Risk: Rs. {results['summary']['total_at_risk_itc']:,.2f}"
+        ))
+        db.commit()
+
+        # Attach original parsed records so front-end can export Excel easily
+        results["_raw_purchase_register"] = purchase_records
+        results["_raw_gstr2b_records"] = portal_records
+        return results
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/compliance/reconcile-2b")
 def reconcile_itc(
@@ -316,18 +357,15 @@ def export_reconcile_excel(
     results = run_gstr2b_reconciliation(payload.purchase_register, payload.gstr2b_records)
     
     wb = Workbook()
-    
-    # Styles
     h_font = Font(name="Arial", size=10, bold=True, color="FFFFFF")
     h_fill_blue = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     h_fill_rose = PatternFill(start_color="991B1B", end_color="991B1B", fill_type="solid")
     h_fill_green = PatternFill(start_color="065F46", end_color="065F46", fill_type="solid")
-    regular_font = Font(name="Arial", size=9)
     
-    # Sheet 1: Summary
+    # Sheet 1: Executive Summary
     ws_sum = wb.active
     ws_sum.title = "Audit Summary"
-    ws_sum.append(["ApexTax Statutory GSTR-2B ITC Audit Report", "", ""])
+    ws_sum.append(["ApexTax Autonomous Statutory GSTR-2B ITC Audit Report", "", ""])
     ws_sum.append(["Generated On", datetime.now().strftime("%d-%m-%Y %H:%M:%S"), ""])
     ws_sum.append([])
     ws_sum.append(["Audit Metric", "Count", "Tax Amount (INR)"])
@@ -336,13 +374,13 @@ def export_reconcile_excel(
         cell.fill = h_fill_blue
     
     ws_sum.append(["Total Purchase Invoices Reviewed", results["summary"]["total_purchases_reviewed"], ""])
-    ws_sum.append(["Matched & Eligible ITC (Safe Claim)", results["summary"]["matched_count"], results["summary"]["total_eligible_itc"]])
-    ws_sum.append(["Missing in 2B (Defaulting Vendors - Hold Payment)", results["summary"]["missing_in_2b_count"], results["summary"]["total_at_risk_itc"]])
+    ws_sum.append(["Matched & Eligible ITC (Sec 16(2)(aa) Safe Claim)", results["summary"]["matched_count"], results["summary"]["total_eligible_itc"]])
+    ws_sum.append(["Missing in 2B (Defaulting Vendors - HOLD PAYMENT)", results["summary"]["missing_in_2b_count"], results["summary"]["total_at_risk_itc"]])
     ws_sum.append(["Tax / Rate Discrepancies", results["summary"]["mismatch_count"], ""])
     
-    # Sheet 2: Missing in 2B (Action Ledger)
+    # Sheet 2: Missing in 2B (Payment Hold Ledger)
     ws_missing = wb.create_sheet(title="Missing in 2B - Hold Pay")
-    ws_missing.append(["Vendor GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value", "ITC at Risk", "Action"])
+    ws_missing.append(["Vendor GSTIN", "Vendor Name", "Invoice No", "Date", "Taxable Value", "ITC at Risk", "Mandated Statutory Action"])
     for cell in ws_missing[1]:
         cell.font = h_font
         cell.fill = h_fill_rose
