@@ -89,6 +89,14 @@
       const [reconResult, setReconResult] = useState(null);
       const [reconLoading, setReconLoading] = useState(false);
 
+      // DRC-01C Auto-Resolver State
+      const [drcRefNo, setDrcRefNo] = useState("ZD360926001882E");
+      const [drcPeriod, setDrcPeriod] = useState("092026");
+      const [drcItc2b, setDrcItc2b] = useState("125000");
+      const [drcItc3b, setDrcItc3b] = useState("168500");
+      const [drcLoading, setDrcLoading] = useState(false);
+      const [drcResult, setDrcResult] = useState(null);
+
       const prInputRef = useRef(null);
       const portalInputRef = useRef(null);
 
@@ -175,7 +183,6 @@
         }
       };
 
-      // Ingest live files via Multipart POST
       const handleUploadAndReconcile = async () => {
         if (!purchaseFile || !portalFile) {
           setStatusMessage({ type: "error", text: "Please drag & drop or select BOTH the Purchase Register and GSTR-2B JSON file." });
@@ -209,7 +216,6 @@
         }
       };
 
-      // Fallback demo simulation
       const handleRunSimulatedRecon = async () => {
         setReconLoading(true);
         setStatusMessage(null);
@@ -272,6 +278,33 @@
         }
       };
 
+      const handleResolveDRC01C = async (e) => {
+        e.preventDefault();
+        setDrcLoading(true);
+        setStatusMessage(null);
+
+        const formData = new FormData();
+        formData.append("ref_no", drcRefNo);
+        formData.append("period", drcPeriod);
+        formData.append("itc_2b", Number(drcItc2b));
+        formData.append("itc_3b", Number(drcItc3b));
+
+        try {
+          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/drc01c/resolve`, {
+            method: "POST",
+            body: formData
+          });
+          const data = await res.json();
+          if (data.status !== "SUCCESS") throw new Error("Could not resolve DRC-01C");
+          setDrcResult(data);
+          setStatusMessage({ type: "success", text: "DRC-01C Statutory Defense & Vendor Directives Generated!" });
+        } catch (err) {
+          setStatusMessage({ type: "error", text: err.message });
+        } finally {
+          setDrcLoading(false);
+        }
+      };
+
       return (
         <div className="min-h-screen flex flex-col">
           <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-30">
@@ -285,10 +318,11 @@
               </div>
             </div>
 
-            <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+            {/* TAB NAVIGATION: 3 TABS */}
+            <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 gap-1">
               <button
                 onClick={() => setActiveTab("invoicing")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-md transition ${
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition ${
                   activeTab === 'invoicing' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -296,12 +330,21 @@
               </button>
               <button
                 onClick={() => setActiveTab("reconciliation")}
-                className={`px-4 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
                   activeTab === 'reconciliation' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
                 }`}
               >
                 <span>GSTR-2B Drag &amp; Drop Matcher</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              </button>
+              <button
+                onClick={() => setActiveTab("drc01c")}
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'drc01c' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>⚡ Rule 88D / DRC-01C</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
               </button>
             </div>
 
@@ -322,7 +365,8 @@
             </div>
           )}
 
-          {activeTab === "invoicing" ? (
+          {/* TAB 1: INVOICING */}
+          {activeTab === "invoicing" && (
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 space-y-6">
                 <form onSubmit={handleSubmitInvoice} className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
@@ -632,8 +676,10 @@
                 </div>
               </div>
             </main>
-          ) : (
-            /* GSTR-2B FILE DRAG & DROP RECONCILIATION TAB */
+          )}
+
+          {/* TAB 2: GSTR-2B RECONCILIATION */}
+          {activeTab === "reconciliation" && (
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                 <div className="flex items-center justify-between">
@@ -660,9 +706,7 @@
                   </div>
                 </div>
 
-                {/* Dual Drag & Drop Zones */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                  {/* Dropzone 1: Purchase Register */}
                   <div
                     onClick={() => prInputRef.current.click()}
                     className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
@@ -689,7 +733,6 @@
                     </div>
                   </div>
 
-                  {/* Dropzone 2: Portal 2B JSON */}
                   <div
                     onClick={() => portalInputRef.current.click()}
                     className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
@@ -730,7 +773,6 @@
 
               {reconResult ? (
                 <div className="space-y-6">
-                  {/* Summary Metric Cards */}
                   <div className="grid grid-cols-4 gap-4">
                     <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-1">
                       <span className="text-xs text-slate-400 uppercase font-semibold block">Total Invoices Reviewed</span>
@@ -753,7 +795,6 @@
                     </div>
                   </div>
 
-                  {/* Missing in 2B Action Box */}
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                       <div>
@@ -794,7 +835,6 @@
                     </table>
                   </div>
 
-                  {/* Fully Matched Section */}
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
                     <h3 className="text-sm font-semibold text-emerald-300 flex items-center gap-2 border-b border-slate-800 pb-3">
                       <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
@@ -825,7 +865,6 @@
                       </tbody>
                     </table>
                   </div>
-
                 </div>
               ) : (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-500 space-y-3">
@@ -838,6 +877,154 @@
                   </p>
                 </div>
               )}
+            </main>
+          )}
+
+          {/* TAB 3: RULE 88D / DRC-01C AUTO-RESOLVER */}
+          {activeTab === "drc01c" && (
+            <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                      <span className="text-amber-400">⚡</span>
+                      Rule 88D / Form GST DRC-01C Notice Resolver
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Automated statutory defense generator for ITC variances between GSTR-2B and GSTR-3B.
+                    </p>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                    7-Day Statutory Defense Window
+                  </span>
+                </div>
+
+                <form onSubmit={handleResolveDRC01C} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Notice Reference Number</label>
+                    <input
+                      type="text"
+                      value={drcRefNo}
+                      onChange={(e) => setDrcRefNo(e.target.value)}
+                      placeholder="e.g. ZD360926001882E"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Tax Period</label>
+                    <input
+                      type="text"
+                      value={drcPeriod}
+                      onChange={(e) => setDrcPeriod(e.target.value)}
+                      placeholder="e.g. 092026"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">GSTR-2B Available ITC (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={drcItc2b}
+                      onChange={(e) => setDrcItc2b(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">GSTR-3B Availed ITC (₹)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={drcItc3b}
+                      onChange={(e) => setDrcItc3b(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
+                      required
+                    />
+                  </div>
+                  <div className="md:col-span-2 pt-2">
+                    <button
+                      type="submit"
+                      disabled={drcLoading}
+                      className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold py-2.5 px-4 rounded-lg shadow-lg shadow-emerald-500/20 transition disabled:opacity-50 text-sm cursor-pointer"
+                    >
+                      {drcLoading ? "Analyzing Statutory Precedents..." : "Generate Portal Part-B Legal Draft & Vendor Hold Directive"}
+                    </button>
+                  </div>
+                </form>
+
+                {drcResult && (
+                  <div className="space-y-6 pt-4 border-t border-slate-800">
+                    {/* Variance Metrics Bar */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
+                        <span className="text-xs text-slate-400 uppercase font-semibold block">Notice Excess ITC Flagged</span>
+                        <span className="text-2xl font-bold font-mono text-rose-400">
+                          Rs. {drcResult.notice_summary.excess_difference.toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
+                        <span className="text-xs text-slate-400 uppercase font-semibold block">Variance Percentage</span>
+                        <span className="text-2xl font-bold font-mono text-amber-300">
+                          {drcResult.notice_summary.variance_percentage}
+                        </span>
+                      </div>
+                      <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
+                        <span className="text-xs text-slate-400 uppercase font-semibold block">Legal Status</span>
+                        <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2 py-1 rounded inline-block mt-1">
+                          PART-B DEFENSE READY
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Part B Legal Draft */}
+                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                          Official Form DRC-01C Part-B Legal Reply (Copy &amp; Paste in GST Portal)
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(drcResult.part_b_reply);
+                            alert("Copied Part-B Legal Text!");
+                          }}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer"
+                        >
+                          📋 Copy Legal Reply
+                        </button>
+                      </div>
+                      <div className="p-4 bg-slate-900 rounded-lg border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed select-all">
+                        {drcResult.part_b_reply}
+                      </div>
+                    </div>
+
+                    {/* WhatsApp Vendor Directive */}
+                    <div className="bg-slate-950 border border-amber-900/40 rounded-xl p-5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
+                          Automated WhatsApp Debit Hold Directive (Send to Defaulting Suppliers)
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(drcResult.vendor_whatsapp_directive);
+                            alert("Copied WhatsApp Directive!");
+                          }}
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer"
+                        >
+                          📲 Copy WhatsApp Draft
+                        </button>
+                      </div>
+                      <div className="p-4 bg-slate-900 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono whitespace-pre-wrap leading-relaxed select-all">
+                        {drcResult.vendor_whatsapp_directive}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </main>
           )}
 
