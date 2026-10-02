@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
@@ -412,3 +412,61 @@ def get_audit(tenant: Tenant = Depends(verify_tenant), db: Session = Depends(get
         ComplianceAuditLog.tenant_id == tenant.id
     ).order_by(ComplianceAuditLog.timestamp.desc()).limit(15).all()
     return {"tenant": tenant.org_name, "audit_events": logs}
+# =====================================================================
+# MODULE: DRC-01C (RULE 88D) AUTO-RESOLVER & STATUTORY DEFENSE
+# =====================================================================
+
+@app.post("/api/v1/compliance/drc01c/resolve")
+async def resolve_drc01c(
+    ref_no: str = Form(...),
+    period: str = Form(...),
+    itc_2b: float = Form(...),
+    itc_3b: float = Form(...),
+    purchase_file: UploadFile = File(None)
+):
+    excess_claimed = round(itc_3b - itc_2b, 2)
+    pct_variance = round((excess_claimed / itc_2b * 100), 2) if itc_2b > 0 else 100.0
+
+    flagged_suppliers_count = 0
+    if purchase_file:
+        try:
+            import pandas as pd
+            content = await purchase_file.read()
+            df = pd.read_excel(io.BytesIO(content)) if purchase_file.filename.endswith(('.xlsx', '.xls')) else pd.read_csv(io.BytesIO(content))
+            flagged_suppliers_count = len(df)
+        except Exception:
+            flagged_suppliers_count = 0
+
+    part_b_legal_draft = (
+        f"In response to Form GST DRC-01C (Reference: {ref_no}) for the tax period {period}, "
+        f"the differential input tax credit of ₹{excess_claimed:,.2f} availed in GSTR-3B over GSTR-2B "
+        f"represents genuine inward supplies received across staggered tax periods. "
+        f"The credit has been availed strictly in compliance with Section 16(2) and within the statutory timeline "
+        f"mandated under Section 16(4) of the CGST Act. No blocked or ineligible credit under Section 17(5) "
+        f"has been claimed. Detailed invoice reconciliations and supplier verification declarations are retained on record."
+    )
+
+    vendor_whatsapp_directive = (
+        f"🚨 *OFFICIAL GST NOTICE RECOVERY INTIMATION*\n"
+        f"Notice Ref: {ref_no} | Period: {period}\n\n"
+        f"Dear Vendor Partner,\n"
+        f"The GST portal has issued Form DRC-01C under Rule 88D citing an ITC variance of ₹{excess_claimed:,.2f}. "
+        f"Inward records show invoices pending or omitted from your GSTR-1 filing.\n\n"
+        f"Please file your GSTR-1 immediately to ensure credit reflection in GSTR-2B. "
+        f"Per statutory guidelines, pending invoice payments remain on temporary hold to prevent Section 50 interest liabilities."
+    )
+
+    return JSONResponse(content={
+        "status": "SUCCESS",
+        "notice_summary": {
+            "ref_number": ref_no,
+            "period": period,
+            "gstr2b_itc": itc_2b,
+            "gstr3b_itc": itc_3b,
+            "excess_difference": excess_claimed,
+            "variance_percentage": f"{pct_variance}%",
+            "suppliers_analyzed": flagged_suppliers_count
+        },
+        "part_b_reply": part_b_legal_draft,
+        "vendor_whatsapp_directive": vendor_whatsapp_directive
+    })
