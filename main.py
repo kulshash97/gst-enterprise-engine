@@ -470,3 +470,55 @@ async def resolve_drc01c(
         "part_b_reply": part_b_legal_draft,
         "vendor_whatsapp_directive": vendor_whatsapp_directive
     })
+    # =====================================================================
+# MODULE: DRC-01B (RULE 88C) OUTWARD LIABILITY AUTO-DEFENSE
+# =====================================================================
+
+@app.post("/api/v1/compliance/drc01b/resolve")
+async def resolve_drc01b(
+    ref_no: str = Form(...),
+    period: str = Form(...),
+    tax_1: float = Form(...),
+    tax_3b: float = Form(...),
+    reason_code: str = Form("TYPO_SUBSEQUENT_ADJUSTMENT")
+):
+    excess_liability = round(tax_1 - tax_3b, 2)
+    pct_variance = round((excess_liability / tax_3b * 100), 2) if tax_3b > 0 else 100.0
+
+    reason_templates = {
+        "TYPO_SUBSEQUENT_ADJUSTMENT": (
+            f"The differential outward liability of ₹{excess_liability:,.2f} reported in Form GSTR-1 over Form GSTR-3B "
+            f"arose due to inadvertent typographical data entry in Table 4/Table 5 of GSTR-1. The actual taxable supplies and tax "
+            f"collected are accurately discharged in GSTR-3B. The rectification/credit note adjustment is being effected in subsequent "
+            f"period returns strictly in terms of Circular No. 170/02/2022-GST."
+        ),
+        "CANCELLED_EINVOICE": (
+            f"The variance of ₹{excess_liability:,.2f} represents e-invoices auto-populated from the IRP into GSTR-1 that were "
+            f"subsequently cancelled by mutual consent with the recipient prior to dispatch of goods. The actual supply was not executed, "
+            f"and hence no tax was collectible or payable under Section 9 of the CGST Act."
+        ),
+        "ADVANCE_ADJUSTMENT": (
+            f"The differential amount of ₹{excess_liability:,.2f} pertains to advances adjusted against tax invoices issued in the current period, "
+            f"where tax had already been paid in preceding tax periods under Section 12/13 of the CGST Act. No revenue loss has occurred."
+        )
+    }
+
+    legal_reply = reason_templates.get(reason_code, reason_templates["TYPO_SUBSEQUENT_ADJUSTMENT"])
+    portal_part_b = (
+        f"In response to Form GST DRC-01B (Ref: {ref_no}) for the tax period {period}, "
+        f"{legal_reply} Certified reconciliation certificates and transaction audit trails are maintained for verification."
+    )
+
+    return JSONResponse(content={
+        "status": "SUCCESS",
+        "notice_summary": {
+            "ref_number": ref_no,
+            "period": period,
+            "gstr1_tax": tax_1,
+            "gstr3b_tax": tax_3b,
+            "excess_outward_flagged": excess_liability,
+            "variance_percentage": f"{pct_variance}%",
+            "statutory_risk": "GSTR-1 Portal Lockout Risk under Rule 59(6)" if excess_liability > 0 else "Compliant"
+        },
+        "part_b_legal_defense": portal_part_b
+    })

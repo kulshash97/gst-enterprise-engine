@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ApexTax Enterprise | Autonomous GST & ITC Engine</title>
+  <title>ApexTax Enterprise | Autonomous GST, Direct Tax & SFT Audit Suite</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -23,13 +24,14 @@
     const { useState, useEffect, useMemo, useRef } = React;
 
     const HSN_RATES = {
-      "8471": 0.18,
-      "8517": 0.18,
-      "6109": 0.05,
-      "1006": 0.00,
-      "9983": 0.18,
-      "8703": 0.28,
+      "8471": 0.18, "8517": 0.18, "6109": 0.05, "1006": 0.00, "9983": 0.18, "8703": 0.28,
     };
+
+    const CLIENT_TENANTS = [
+      { id: "apex", name: "Apex Industrial Supplies Ltd", gstin: "36AAACG1234F1Z5", state: "36" },
+      { id: "deccan", name: "Deccan Logistics & Infra Pvt Ltd", gstin: "36AABCD5521K1Z2", state: "36" },
+      { id: "hitec", name: "Hitec Cloud Technologies LLP", gstin: "36AAFFH9912Q1Z9", state: "36" }
+    ];
 
     const samplePurchaseRegister = [
       { vendor_gstin: "27AAACB2212P1Z0", vendor_name: "Tata Cloud Hosting", doc_number: "TCS/26/1092", doc_date: "2026-09-02", taxable_value: 50000.0, tax_amount: 9000.0 },
@@ -46,6 +48,7 @@
 
     function App() {
       const [activeTab, setActiveTab] = useState("invoicing");
+      const [currentTenant, setCurrentTenant] = useState(CLIENT_TENANTS[0]);
       const [apiKey, setApiKey] = useState("gst_EgKLOK0WOPPoQHjJ7hPJGU334kjDsvnTpVY53iyM8jc");
       const [apiBaseUrl, setApiBaseUrl] = useState(window.location.origin);
       const [statusMessage, setStatusMessage] = useState(null);
@@ -55,16 +58,6 @@
       const [docNumber, setDocNumber] = useState(`INV/2026/${Math.floor(1000 + Math.random() * 9000)}`);
       const [docDate, setDocDate] = useState(new Date().toISOString().split("T")[0]);
       const [vehicleNumber, setVehicleNumber] = useState("TS09UB1234");
-      
-      const [supplier, setSupplier] = useState({
-        legal_name: "Apex Industrial Supplies Ltd",
-        gstin: "36AAACG1234F1Z5",
-        address: "Plot 42, Hitec City",
-        city: "Hyderabad",
-        state_code: "36",
-        pincode: 500081
-      });
-
       const [recipient, setRecipient] = useState({
         legal_name: "Bengaluru Tech Corp Pvt Ltd",
         gstin: "29AABCU9603R1ZX",
@@ -74,22 +67,22 @@
         pincode: 560055,
         email: "billing@techcorp.in"
       });
-
       const [items, setItems] = useState([
         { item_name: "Enterprise Server Unit", hsn_code: "84713010", quantity: 2, unit_price: 45000 },
         { item_name: "IT Infrastructure Setup", hsn_code: "99831100", quantity: 1, unit_price: 15000 }
       ]);
-
       const [latestResponse, setLatestResponse] = useState(null);
       const [auditLogs, setAuditLogs] = useState([]);
 
-      // 2B File Upload & Reconciliation State
+      // GSTR-2B State
       const [purchaseFile, setPurchaseFile] = useState(null);
       const [portalFile, setPortalFile] = useState(null);
       const [reconResult, setReconResult] = useState(null);
       const [reconLoading, setReconLoading] = useState(false);
+      const prInputRef = useRef(null);
+      const portalInputRef = useRef(null);
 
-      // DRC-01C Auto-Resolver State
+      // DRC-01C State
       const [drcRefNo, setDrcRefNo] = useState("ZD360926001882E");
       const [drcPeriod, setDrcPeriod] = useState("092026");
       const [drcItc2b, setDrcItc2b] = useState("125000");
@@ -97,14 +90,27 @@
       const [drcLoading, setDrcLoading] = useState(false);
       const [drcResult, setDrcResult] = useState(null);
 
-      const prInputRef = useRef(null);
-      const portalInputRef = useRef(null);
+      // DRC-01B State
+      const [drcbRefNo, setDrcbRefNo] = useState("ZB360926009812A");
+      const [drcbPeriod, setDrcbPeriod] = useState("092026");
+      const [drcbTax1, setDrcbTax1] = useState("240000");
+      const [drcbTax3b, setDrcbTax3b] = useState("180000");
+      const [drcbReason, setDrcbReason] = useState("TYPO_SUBSEQUENT_ADJUSTMENT");
+      const [drcbLoading, setDrcbLoading] = useState(false);
+      const [drcbResult, setDrcbResult] = useState(null);
+
+      // Bank Statement & SFT Analyzer State
+      const [bankFileName, setBankFileName] = useState(null);
+      const [bankAccountType, setBankAccountType] = useState("Current");
+      const [isItrNonFiler, setIsItrNonFiler] = useState(false);
+      const [largeCreditThreshold, setLargeCreditThreshold] = useState(500000);
+      const [bankAuditSummary, setBankAuditSummary] = useState(null);
+      const bankFileInputRef = useRef(null);
 
       const calculations = useMemo(() => {
-        const isInterstate = supplier.state_code !== recipient.state_code;
+        const isInterstate = currentTenant.state !== recipient.state_code;
         let taxableTotal = 0;
         let totalTax = 0;
-
         items.forEach((itm) => {
           const taxable = (itm.quantity || 0) * (itm.unit_price || 0);
           taxableTotal += taxable;
@@ -112,10 +118,7 @@
           const rate = HSN_RATES[prefix] !== undefined ? HSN_RATES[prefix] : 0.18;
           totalTax += taxable * rate;
         });
-
         const grandTotal = taxableTotal + totalTax;
-        const ewayMandatory = grandTotal >= 50000;
-
         return {
           isInterstate,
           taxableTotal,
@@ -123,9 +126,9 @@
           sgst: isInterstate ? 0 : totalTax / 2,
           igst: isInterstate ? totalTax : 0,
           grandTotal,
-          ewayMandatory
+          ewayMandatory: grandTotal >= 50000
         };
-      }, [supplier.state_code, recipient.state_code, items]);
+      }, [currentTenant.state, recipient.state_code, items]);
 
       const fetchAuditTrail = async () => {
         try {
@@ -149,31 +152,31 @@
         e.preventDefault();
         setLoading(true);
         setStatusMessage(null);
-
         const payload = {
           doc_number: docNumber,
           doc_date: docDate,
-          supplier: { ...supplier, pincode: Number(supplier.pincode) },
+          supplier: {
+            legal_name: currentTenant.name,
+            gstin: currentTenant.gstin,
+            address: "Plot 42, Hitec City",
+            city: "Hyderabad",
+            state_code: currentTenant.state,
+            pincode: 500081
+          },
           recipient: { ...recipient, pincode: Number(recipient.pincode) },
           items: items.map(i => ({ ...i, quantity: Number(i.quantity), unit_price: Number(i.unit_price) })),
           vehicle_number: vehicleNumber || null
         };
-
         try {
           const res = await fetch(`${apiBaseUrl}/api/v1/invoices/process`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey.trim()
-            },
+            headers: { "Content-Type": "application/json", "x-api-key": apiKey.trim() },
             body: JSON.stringify(payload)
           });
-
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to process invoice");
-
           setLatestResponse(data);
-          setStatusMessage({ type: "success", text: `Invoice ${docNumber} successfully sealed & IRN created!` });
+          setStatusMessage({ type: "success", text: `Invoice ${docNumber} sealed & IRN minted!` });
           fetchAuditTrail();
           setDocNumber(`INV/2026/${Math.floor(1000 + Math.random() * 9000)}`);
         } catch (err) {
@@ -185,29 +188,24 @@
 
       const handleUploadAndReconcile = async () => {
         if (!purchaseFile || !portalFile) {
-          setStatusMessage({ type: "error", text: "Please drag & drop or select BOTH the Purchase Register and GSTR-2B JSON file." });
+          setStatusMessage({ type: "error", text: "Select BOTH the Purchase Register and GSTR-2B JSON file." });
           return;
         }
-
         setReconLoading(true);
         setStatusMessage(null);
-
         const formData = new FormData();
         formData.append("purchase_file", purchaseFile);
         formData.append("portal_file", portalFile);
-
         try {
           const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-files`, {
             method: "POST",
             headers: { "x-api-key": apiKey.trim() },
             body: formData
           });
-
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Reconciliation failed");
-
           setReconResult(data);
-          setStatusMessage({ type: "success", text: "Live audit complete! View categorized buckets below." });
+          setStatusMessage({ type: "success", text: "Live Section 16(2)(aa) audit completed!" });
           fetchAuditTrail();
         } catch (err) {
           setStatusMessage({ type: "error", text: err.message });
@@ -218,28 +216,15 @@
 
       const handleRunSimulatedRecon = async () => {
         setReconLoading(true);
-        setStatusMessage(null);
-
         try {
           const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-2b`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey.trim()
-            },
+            headers: { "Content-Type": "application/json", "x-api-key": apiKey.trim() },
             body: JSON.stringify({ purchase_register: samplePurchaseRegister, gstr2b_records: sampleGstr2b })
           });
-
           const data = await res.json();
-          if (!res.ok) throw new Error(data.detail || "Failed to reconcile");
-
-          setReconResult({
-            ...data,
-            _raw_purchase_register: samplePurchaseRegister,
-            _raw_gstr2b_records: sampleGstr2b
-          });
-          setStatusMessage({ type: "success", text: "Simulated GSTR-2B Audit complete! View categorized buckets below." });
-          fetchAuditTrail();
+          setReconResult({ ...data, _raw_purchase_register: samplePurchaseRegister, _raw_gstr2b_records: sampleGstr2b });
+          setStatusMessage({ type: "success", text: "Simulated GSTR-2B audit completed!" });
         } catch (err) {
           setStatusMessage({ type: "error", text: err.message });
         } finally {
@@ -247,57 +232,19 @@
         }
       };
 
-      const handleDownloadReconExcel = async () => {
-        try {
-          const payload = {
-            purchase_register: reconResult._raw_purchase_register || samplePurchaseRegister,
-            gstr2b_records: reconResult._raw_gstr2b_records || sampleGstr2b
-          };
-
-          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/reconcile-2b/excel`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": apiKey.trim()
-            },
-            body: JSON.stringify(payload)
-          });
-
-          if (!res.ok) throw new Error("Failed to generate Excel report");
-
-          const blob = await res.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "GSTR2B_Reconciliation_Audit.xlsx";
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        } catch (err) {
-          setStatusMessage({ type: "error", text: err.message });
-        }
-      };
-
       const handleResolveDRC01C = async (e) => {
         e.preventDefault();
         setDrcLoading(true);
-        setStatusMessage(null);
-
         const formData = new FormData();
         formData.append("ref_no", drcRefNo);
         formData.append("period", drcPeriod);
         formData.append("itc_2b", Number(drcItc2b));
         formData.append("itc_3b", Number(drcItc3b));
-
         try {
-          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/drc01c/resolve`, {
-            method: "POST",
-            body: formData
-          });
+          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/drc01c/resolve`, { method: "POST", body: formData });
           const data = await res.json();
-          if (data.status !== "SUCCESS") throw new Error("Could not resolve DRC-01C");
           setDrcResult(data);
-          setStatusMessage({ type: "success", text: "DRC-01C Statutory Defense & Vendor Directives Generated!" });
+          setStatusMessage({ type: "success", text: "DRC-01C statutory Part-B reply generated!" });
         } catch (err) {
           setStatusMessage({ type: "error", text: err.message });
         } finally {
@@ -305,63 +252,261 @@
         }
       };
 
+      const handleResolveDRC01B = async (e) => {
+        e.preventDefault();
+        setDrcbLoading(true);
+        const formData = new FormData();
+        formData.append("ref_no", drcbRefNo);
+        formData.append("period", drcbPeriod);
+        formData.append("tax_1", Number(drcbTax1));
+        formData.append("tax_3b", Number(drcbTax3b));
+        formData.append("reason_code", drcbReason);
+        try {
+          const res = await fetch(`${apiBaseUrl}/api/v1/compliance/drc01b/resolve`, { method: "POST", body: formData });
+          const data = await res.json();
+          setDrcbResult(data);
+          setStatusMessage({ type: "success", text: "DRC-01B outward defense generated!" });
+        } catch (err) {
+          setStatusMessage({ type: "error", text: err.message });
+        } finally {
+          setDrcbLoading(false);
+        }
+      };
+
+      // Client-Side Bank Statement & SFT Audit Engine
+      const handleParseBankStatement = (file) => {
+        if (!file) return;
+        setBankFileName(file.name);
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: "array" });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: "" });
+
+            let headerIdx = -1;
+            let dateCol = -1, narrCol = -1, debitCol = -1, creditCol = -1, balCol = -1;
+
+            for (let i = 0; i < Math.min(rows.length, 25); i++) {
+              const r = rows[i].map(c => String(c).toLowerCase().trim());
+              dateCol = r.findIndex(c => c.includes("date") || c.includes("txn date") || c.includes("value dt"));
+              narrCol = r.findIndex(c => c.includes("narration") || c.includes("particular") || c.includes("description"));
+              debitCol = r.findIndex(c => c.includes("debit") || c.includes("withdrawal") || c.includes("dr"));
+              creditCol = r.findIndex(c => c.includes("credit") || c.includes("deposit") || c.includes("cr"));
+              balCol = r.findIndex(c => c.includes("balance") || c.includes("closing"));
+              if (dateCol !== -1 && (debitCol !== -1 || creditCol !== -1)) {
+                headerIdx = i;
+                break;
+              }
+            }
+
+            let totalCredits = 0, totalDebits = 0;
+            let cashDeposits = 0, cashWithdrawals = 0;
+            let singleDayHighCash = [];
+            let largeCredits = [];
+            let inwardBounces = 0, outwardBounces = 0;
+            const dateCashMap = {};
+
+            const parseVal = (v) => {
+              if (typeof v === "number") return v;
+              if (!v) return 0;
+              const clean = String(v).replace(/[^0-9.-]+/g, "");
+              const n = parseFloat(clean);
+              return isNaN(n) ? 0 : n;
+            };
+
+            const dataRows = headerIdx !== -1 ? rows.slice(headerIdx + 1) : rows;
+
+            dataRows.forEach(r => {
+              const rawNarr = narrCol !== -1 ? String(r[narrCol] || "") : "";
+              const rawDate = dateCol !== -1 ? String(r[dateCol] || "") : "Unknown";
+              const debit = debitCol !== -1 ? parseVal(r[debitCol]) : 0;
+              const credit = creditCol !== -1 ? parseVal(r[creditCol]) : 0;
+
+              totalDebits += debit;
+              totalCredits += credit;
+
+              const narrUpper = rawNarr.toUpperCase();
+              const isCash = narrUpper.includes("CASH") || narrUpper.includes("CWDR") || narrUpper.includes("CDTR") || narrUpper.includes("BY CASH") || narrUpper.includes("SELF");
+
+              if (credit > 0 && isCash) {
+                cashDeposits += credit;
+                dateCashMap[rawDate] = (dateCashMap[rawDate] || 0) + credit;
+              }
+
+              if (debit > 0 && isCash) {
+                cashWithdrawals += debit;
+              }
+
+              if (credit >= Number(largeCreditThreshold)) {
+                largeCredits.push({ date: rawDate, narration: rawNarr, amount: credit });
+              }
+
+              if (narrUpper.includes("BOUNCE") || narrUpper.includes("RETURN") || narrUpper.includes("RET") || narrUpper.includes("ECS RET") || narrUpper.includes("INSUFFICIENT")) {
+                if (debit > 0) outwardBounces++;
+                if (credit > 0) inwardBounces++;
+              }
+            });
+
+            Object.entries(dateCashMap).forEach(([dt, amt]) => {
+              if (amt >= 200000) {
+                singleDayHighCash.push({ date: dt, amount: amt });
+              }
+            });
+
+            // Statutory Audit Verification
+            const sftThreshold = bankAccountType === "Current" ? 5000000 : 1000000;
+            const sftBreached = cashDeposits >= sftThreshold;
+            const sec269stBreached = singleDayHighCash.length > 0;
+
+            const tds194nThreshold = isItrNonFiler ? 2000000 : 10000000;
+            const sec194nBreached = cashWithdrawals >= tds194nThreshold;
+
+            setBankAuditSummary({
+              totalCredits,
+              totalDebits,
+              cashDeposits,
+              cashWithdrawals,
+              sftThreshold,
+              sftBreached,
+              sec269stBreached,
+              singleDayHighCash,
+              sec194nBreached,
+              tds194nThreshold,
+              largeCredits,
+              inwardBounces,
+              outwardBounces,
+              rowCount: dataRows.length
+            });
+            setStatusMessage({ type: "success", text: "Bank Statement Analyzed Locally! Statutory flags updated." });
+          } catch (err) {
+            console.error(err);
+            setStatusMessage({ type: "error", text: "Failed to parse bank file format." });
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const handleSimulateBankAudit = () => {
+        setBankFileName("HDFC_Corporate_Statement_Sept2026.xlsx");
+        setBankAuditSummary({
+          totalCredits: 18450000,
+          totalDebits: 16210000,
+          cashDeposits: 5400000,
+          cashWithdrawals: 2850000,
+          sftThreshold: 5000000,
+          sftBreached: true,
+          sec269stBreached: true,
+          singleDayHighCash: [
+            { date: "14-09-2026", amount: 245000 },
+            { date: "22-09-2026", amount: 310000 }
+          ],
+          sec194nBreached: isItrNonFiler,
+          tds194nThreshold: isItrNonFiler ? 2000000 : 10000000,
+          largeCredits: [
+            { date: "05-09-2026", narration: "RTGS CR-TEX TRADERS-INVOICE REF", amount: 2200000 },
+            { date: "18-09-2026", narration: "NEFT CR-UNIDENTIFIED REMITTANCE", amount: 1450000 }
+          ],
+          inwardBounces: 2,
+          outwardBounces: 0,
+          rowCount: 142
+        });
+        setStatusMessage({ type: "success", text: "Bank Statement Audit Demo Loaded!" });
+      };
+
       return (
         <div className="min-h-screen flex flex-col">
-          <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-4 flex items-center justify-between sticky top-0 z-30">
+          <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur px-6 py-3.5 flex items-center justify-between sticky top-0 z-30">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center font-bold text-lg text-white shadow-lg shadow-cyan-500/20">
                 A
               </div>
               <div>
-                <h1 className="font-bold text-lg leading-none tracking-tight text-white">ApexTax Enterprise</h1>
-                <p className="text-xs text-slate-400 mt-1">Autonomous Outward Invoicing &amp; GSTR-2B ITC Reconciliation</p>
+                <h1 className="font-bold text-base leading-none tracking-tight text-white">ApexTax Enterprise</h1>
+                <p className="text-[11px] text-slate-400 mt-1">Autonomous GST, Direct Tax &amp; SFT Audit Platform</p>
               </div>
             </div>
 
-            {/* TAB NAVIGATION: 3 TABS */}
+            {/* TAB SELECTOR */}
             <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800 gap-1">
               <button
                 onClick={() => setActiveTab("invoicing")}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition ${
-                  activeTab === 'invoicing' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition ${
+                  activeTab === 'invoicing' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Tax Invoicing &amp; IRN
+                Invoicing &amp; IRN
               </button>
               <button
                 onClick={() => setActiveTab("reconciliation")}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
-                  activeTab === 'reconciliation' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'reconciliation' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <span>GSTR-2B Drag &amp; Drop Matcher</span>
+                <span>2B Matcher</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
               </button>
               <button
                 onClick={() => setActiveTab("drc01c")}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
-                  activeTab === 'drc01c' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'drc01c' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <span>⚡ Rule 88D / DRC-01C</span>
+                <span>DRC-01C (88D)</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              </button>
+              <button
+                onClick={() => setActiveTab("drc01b")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'drc01b' ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>DRC-01B (88C)</span>
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+              </button>
+              <button
+                onClick={() => setActiveTab("bank_audit")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition flex items-center gap-1.5 ${
+                  activeTab === 'bank_audit' ? 'bg-amber-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>🏦 Bank &amp; SFT Audit</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2.5 py-1 rounded">
-                Tenant: apex (Authorized)
+            {/* MULTI-TENANT WORKSPACE SELECTOR */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded px-2.5 py-1">
+                <span className="text-[10px] text-slate-400 uppercase font-bold">Client:</span>
+                <select
+                  value={currentTenant.id}
+                  onChange={(e) => {
+                    const sel = CLIENT_TENANTS.find(t => t.id === e.target.value);
+                    if (sel) setCurrentTenant(sel);
+                  }}
+                  className="bg-transparent text-xs text-cyan-300 font-semibold focus:outline-none cursor-pointer"
+                >
+                  {CLIENT_TENANTS.map(t => (
+                    <option key={t.id} value={t.id} className="bg-slate-900 text-white">
+                      {t.name.slice(0, 22)}...
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <span className="text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2 py-1 rounded">
+                Authorized
               </span>
             </div>
           </header>
 
           {statusMessage && (
-            <div className={`px-6 py-3 text-sm flex items-center justify-between ${
+            <div className={`px-6 py-2.5 text-xs flex items-center justify-between ${
               statusMessage.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border-b border-emerald-800' : 'bg-rose-950/80 text-rose-300 border-b border-rose-800'
             }`}>
               <span>{statusMessage.text}</span>
-              <button onClick={() => setStatusMessage(null)} className="text-xs font-bold uppercase tracking-wider opacity-70 hover:opacity-100">Dismiss</button>
+              <button onClick={() => setStatusMessage(null)} className="text-[10px] font-bold uppercase tracking-wider opacity-70 hover:opacity-100">Dismiss</button>
             </div>
           )}
 
@@ -405,7 +550,7 @@
                       <label className="block text-xs font-medium text-slate-400 mb-1">Vehicle No. (Part-B)</label>
                       <input
                         type="text"
-                        placeholder="e.g. TS09UB1234"
+                        placeholder="TS09UB1234"
                         value={vehicleNumber}
                         onChange={(e) => setVehicleNumber(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-cyan-500 font-mono outline-none uppercase"
@@ -415,64 +560,22 @@
 
                   <div className="grid grid-cols-2 gap-4 pt-2">
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
-                      <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider block">Supplier (From)</span>
-                      <input
-                        type="text"
-                        placeholder="Legal Name"
-                        value={supplier.legal_name}
-                        onChange={(e) => setSupplier({ ...supplier, legal_name: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none"
-                      />
+                      <span className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider block">Supplier (From Active Client)</span>
+                      <input type="text" value={currentTenant.name} readOnly className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none" />
                       <div className="grid grid-cols-3 gap-2">
-                        <input
-                          type="text"
-                          placeholder="GSTIN"
-                          value={supplier.gstin}
-                          onChange={(e) => setSupplier({ ...supplier, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none uppercase"
-                        />
-                        <input
-                          type="text"
-                          placeholder="State"
-                          value={supplier.state_code}
-                          readOnly
-                          className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
-                        />
+                        <input type="text" value={currentTenant.gstin} readOnly className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none" />
+                        <input type="text" value={`State: ${currentTenant.state}`} readOnly className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono" />
                       </div>
                     </div>
 
                     <div className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-3 space-y-2">
                       <span className="text-[11px] font-bold text-blue-400 uppercase tracking-wider block">Recipient (Billed To)</span>
-                      <input
-                        type="text"
-                        placeholder="Legal Name"
-                        value={recipient.legal_name}
-                        onChange={(e) => setRecipient({ ...recipient, legal_name: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none"
-                      />
+                      <input type="text" placeholder="Legal Name" value={recipient.legal_name} onChange={(e) => setRecipient({ ...recipient, legal_name: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white outline-none" />
                       <div className="grid grid-cols-3 gap-2">
-                        <input
-                          type="text"
-                          placeholder="GSTIN"
-                          value={recipient.gstin}
-                          onChange={(e) => setRecipient({ ...recipient, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })}
-                          className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none uppercase"
-                        />
-                        <input
-                          type="text"
-                          placeholder="State"
-                          value={recipient.state_code}
-                          readOnly
-                          className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono"
-                        />
+                        <input type="text" placeholder="GSTIN" value={recipient.gstin} onChange={(e) => setRecipient({ ...recipient, gstin: e.target.value, state_code: e.target.value.slice(0, 2) })} className="col-span-2 bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-200 font-mono outline-none uppercase" />
+                        <input type="text" placeholder="State" value={recipient.state_code} readOnly className="bg-slate-900/50 border border-slate-800 text-center rounded px-2.5 py-1.5 text-xs text-slate-400 font-mono" />
                       </div>
-                      <input
-                        type="email"
-                        placeholder="Billing Email"
-                        value={recipient.email}
-                        onChange={(e) => setRecipient({ ...recipient, email: e.target.value })}
-                        className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none"
-                      />
+                      <input type="email" placeholder="Billing Email" value={recipient.email} onChange={(e) => setRecipient({ ...recipient, email: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 outline-none" />
                     </div>
                   </div>
 
@@ -482,48 +585,16 @@
                       {items.map((item, idx) => (
                         <div key={idx} className="grid grid-cols-12 gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800 items-center">
                           <div className="col-span-5">
-                            <input
-                              type="text"
-                              value={item.item_name}
-                              onChange={(e) => {
-                                const up = [...items]; up[idx].item_name = e.target.value; setItems(up);
-                              }}
-                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white"
-                              required
-                            />
+                            <input type="text" value={item.item_name} onChange={(e) => { const up = [...items]; up[idx].item_name = e.target.value; setItems(up); }} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-white" required />
                           </div>
                           <div className="col-span-2">
-                            <input
-                              type="text"
-                              value={item.hsn_code}
-                              onChange={(e) => {
-                                const up = [...items]; up[idx].hsn_code = e.target.value; setItems(up);
-                              }}
-                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono"
-                              required
-                            />
+                            <input type="text" value={item.hsn_code} onChange={(e) => { const up = [...items]; up[idx].hsn_code = e.target.value; setItems(up); }} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono" required />
                           </div>
                           <div className="col-span-2">
-                            <input
-                              type="number"
-                              value={item.quantity}
-                              onChange={(e) => {
-                                const up = [...items]; up[idx].quantity = Number(e.target.value); setItems(up);
-                              }}
-                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right"
-                              required
-                            />
+                            <input type="number" value={item.quantity} onChange={(e) => { const up = [...items]; up[idx].quantity = Number(e.target.value); setItems(up); }} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right" required />
                           </div>
                           <div className="col-span-3">
-                            <input
-                              type="number"
-                              value={item.unit_price}
-                              onChange={(e) => {
-                                const up = [...items]; up[idx].unit_price = Number(e.target.value); setItems(up);
-                              }}
-                              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right"
-                              required
-                            />
+                            <input type="number" value={item.unit_price} onChange={(e) => { const up = [...items]; up[idx].unit_price = Number(e.target.value); setItems(up); }} className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 font-mono text-right" required />
                           </div>
                         </div>
                       ))}
@@ -535,7 +606,6 @@
                       <span>Taxable Subtotal:</span>
                       <span className="font-mono text-slate-200">Rs. {calculations.taxableTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
-
                     {calculations.isInterstate ? (
                       <div className="flex justify-between text-xs text-purple-300">
                         <span>Interstate IGST:</span>
@@ -553,25 +623,13 @@
                         </div>
                       </>
                     )}
-
                     <div className="border-t border-slate-800 pt-2 flex items-center justify-between">
-                      <div>
-                        <span className="text-sm font-bold text-white block">Grand Total:</span>
-                        <span className="text-[11px] text-slate-400">
-                          {calculations.isInterstate ? "Place of Supply: Interstate" : "Place of Supply: Intrastate"}
-                        </span>
-                      </div>
-                      <span className="text-lg font-extrabold text-cyan-400 font-mono">
-                        Rs. {calculations.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                      </span>
+                      <span className="text-sm font-bold text-white block">Grand Total:</span>
+                      <span className="text-lg font-extrabold text-cyan-400 font-mono">Rs. {calculations.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-cyan-500/20 transition disabled:opacity-50 text-sm cursor-pointer"
-                  >
+                  <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-lg shadow-cyan-500/20 transition disabled:opacity-50 text-sm cursor-pointer">
                     {loading ? "Verifying & Signing with IRP..." : "Generate Compliant Invoice & Seal IRN"}
                   </button>
                 </form>
@@ -579,106 +637,28 @@
 
               <div className="lg:col-span-5 space-y-6">
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <h3 className="text-sm font-semibold text-white">Compliance Artifacts</h3>
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
-                      Live IRP Schema v1.03
-                    </span>
-                  </div>
-
+                  <h3 className="text-sm font-semibold text-white border-b border-slate-800 pb-3">Compliance Artifacts</h3>
                   {latestResponse ? (
                     <div className="space-y-4">
-                      <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-2">
+                      <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 space-y-1">
                         <span className="text-xs text-slate-400 block">NIC Invoice Reference Number (IRN):</span>
-                        <div className="font-mono text-[11px] text-cyan-300 break-all bg-slate-900 p-2 rounded border border-slate-800/80 select-all">
+                        <div className="font-mono text-[11px] text-cyan-300 break-all bg-slate-900 p-2 rounded border border-slate-800 select-all">
                           {latestResponse.compliance.irn}
                         </div>
                       </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">E-Way Bill Status</span>
-                          <span className="font-bold text-amber-300 font-mono text-xs">
-                            {latestResponse.compliance.eway_bill_status}
-                          </span>
-                        </div>
-                        <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                          <span className="text-slate-400 block text-[10px] uppercase font-semibold">Invoice Status</span>
-                          <span className="font-medium text-emerald-300 text-xs">
-                            {latestResponse.status}
-                          </span>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => window.open(`${apiBaseUrl}/api/v1/invoices/${encodeURIComponent(latestResponse.doc_number)}/pdf?x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
-                        className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2.5 px-3 rounded-lg border border-cyan-500 flex items-center justify-center gap-2 text-xs transition cursor-pointer shadow-lg shadow-cyan-500/20"
-                      >
-                        <span>Download Official GST Tax Invoice (PDF)</span>
+                      <button onClick={() => window.open(`${apiBaseUrl}/api/v1/invoices/${encodeURIComponent(latestResponse.doc_number)}/pdf?x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-medium py-2 px-3 rounded-lg border border-cyan-500 flex items-center justify-center gap-2 text-xs transition cursor-pointer">
+                        Download Official GST Tax Invoice (PDF)
                       </button>
                     </div>
                   ) : (
-                    <div className="py-12 text-center text-slate-500 text-xs space-y-2">
-                      <div className="w-10 h-10 border border-dashed border-slate-700 rounded-full mx-auto flex items-center justify-center text-slate-600">
-                        IRN
-                      </div>
-                      <p>Submit form to view statutory seals.</p>
-                    </div>
+                    <div className="py-12 text-center text-slate-500 text-xs">Submit invoice to view IRN seal.</div>
                   )}
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <h3 className="text-sm font-semibold text-white">Statutory GSTR-1 Return Filing</h3>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
-                      Period: 09/2026
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/json?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
-                      className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
-                    >
-                      <span className="font-mono font-bold text-xs text-cyan-400">.JSON</span>
-                      <span className="text-[11px] font-medium">Portal Schema</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => window.open(`${apiBaseUrl}/api/v1/compliance/gstr1/excel?period=092026&x-api-key=${encodeURIComponent(apiKey.trim())}`, '_blank')}
-                      className="bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 p-3 rounded-lg flex flex-col items-center justify-center gap-1 transition cursor-pointer"
-                    >
-                      <span className="font-mono font-bold text-xs text-emerald-400">.XLSX</span>
-                      <span className="text-[11px] font-medium">Offline Tool Excel</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-3">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                    <h3 className="text-sm font-semibold text-white">Immutable Audit Trail</h3>
-                    <button onClick={fetchAuditTrail} className="text-xs text-cyan-400 hover:underline">Refresh</button>
-                  </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {auditLogs.map((log) => (
-                      <div key={log.id} className="bg-slate-950 border border-slate-800 p-2 rounded text-xs space-y-1">
-                        <div className="flex justify-between items-center">
-                          <span className="font-semibold text-slate-300">{log.doc_number}</span>
-                          <span className="text-[10px] text-slate-500 font-mono">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                        </div>
-                        <p className="text-[11px] text-cyan-400 font-mono">{log.event_type}</p>
-                        <p className="text-[11px] text-slate-400 truncate">{log.details}</p>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               </div>
             </main>
           )}
 
-          {/* TAB 2: GSTR-2B RECONCILIATION */}
+          {/* TAB 2: GSTR-2B MATCHING */}
           {activeTab === "reconciliation" && (
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
@@ -687,339 +667,292 @@
                     <h2 className="text-base font-semibold text-white">Automated GSTR-2B vs. Purchase Register Matcher</h2>
                     <p className="text-xs text-slate-400 mt-0.5">Drag and drop client files to verify Section 16(2)(aa) compliance</p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    {reconResult && (
-                      <button
-                        onClick={handleDownloadReconExcel}
-                        className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-emerald-400 font-semibold py-2 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shadow"
-                      >
-                        <span>📥 Download Audit Report (.XLSX)</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={handleRunSimulatedRecon}
-                      disabled={reconLoading}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 py-2 px-3 rounded-lg text-xs transition"
-                    >
-                      Quick Demo Simulation
-                    </button>
-                  </div>
+                  <button onClick={handleRunSimulatedRecon} disabled={reconLoading} className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 py-2 px-3 rounded-lg text-xs transition">
+                    Quick Demo Simulation
+                  </button>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                  <div
-                    onClick={() => prInputRef.current.click()}
-                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
-                      purchaseFile ? 'border-cyan-500 bg-cyan-950/20' : 'border-slate-800 hover:border-slate-600 bg-slate-950/60'
-                    }`}
-                  >
-                    <input
-                      ref={prInputRef}
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={(e) => setPurchaseFile(e.target.files[0])}
-                      className="hidden"
-                    />
-                    <div className="w-10 h-10 rounded-full bg-cyan-500/10 text-cyan-400 flex items-center justify-center font-bold text-sm">
-                      1
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-slate-200">
-                        {purchaseFile ? purchaseFile.name : "Drop Client Purchase Register (.xlsx / .csv)"}
-                      </p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        {purchaseFile ? `${(purchaseFile.size / 1024).toFixed(1)} KB selected` : "Auto-detects invoice, GSTIN, and taxable value columns"}
-                      </p>
-                    </div>
+                  <div onClick={() => prInputRef.current.click()} className="border-2 border-dashed border-slate-800 hover:border-slate-600 rounded-xl p-6 text-center cursor-pointer bg-slate-950/60">
+                    <input ref={prInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setPurchaseFile(e.target.files[0])} className="hidden" />
+                    <p className="text-xs font-semibold text-slate-200">{purchaseFile ? purchaseFile.name : "1. Drop Purchase Register (.xlsx / .csv)"}</p>
                   </div>
-
-                  <div
-                    onClick={() => portalInputRef.current.click()}
-                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
-                      portalFile ? 'border-emerald-500 bg-emerald-950/20' : 'border-slate-800 hover:border-slate-600 bg-slate-950/60'
-                    }`}
-                  >
-                    <input
-                      ref={portalInputRef}
-                      type="file"
-                      accept=".json"
-                      onChange={(e) => setPortalFile(e.target.files[0])}
-                      className="hidden"
-                    />
-                    <div className="w-10 h-10 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold text-sm">
-                      2
-                    </div>
-                    <div>
-                      <p className="text-xs font-semibold text-slate-200">
-                        {portalFile ? portalFile.name : "Drop GST Portal GSTR-2B (.json)"}
-                      </p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        {portalFile ? `${(portalFile.size / 1024).toFixed(1)} KB selected` : "Direct export from GST portal inward supplies"}
-                      </p>
-                    </div>
+                  <div onClick={() => portalInputRef.current.click()} className="border-2 border-dashed border-slate-800 hover:border-slate-600 rounded-xl p-6 text-center cursor-pointer bg-slate-950/60">
+                    <input ref={portalInputRef} type="file" accept=".json" onChange={(e) => setPortalFile(e.target.files[0])} className="hidden" />
+                    <p className="text-xs font-semibold text-slate-200">{portalFile ? portalFile.name : "2. Drop GST Portal GSTR-2B (.json)"}</p>
                   </div>
                 </div>
-
                 <div className="flex justify-end pt-2">
-                  <button
-                    onClick={handleUploadAndReconcile}
-                    disabled={reconLoading || !purchaseFile || !portalFile}
-                    className="w-full md:w-auto bg-gradient-to-r from-emerald-500 to-cyan-600 hover:from-emerald-400 hover:to-cyan-500 text-white font-semibold py-2.5 px-6 rounded-lg text-xs shadow-lg shadow-emerald-500/20 transition disabled:opacity-40 cursor-pointer"
-                  >
-                    {reconLoading ? "Parsing & Reconciling Files..." : "Run Autonomous Reconciliation"}
+                  <button onClick={handleUploadAndReconcile} disabled={reconLoading || !purchaseFile || !portalFile} className="bg-gradient-to-r from-emerald-500 to-cyan-600 text-white font-semibold py-2.5 px-6 rounded-lg text-xs transition disabled:opacity-40">
+                    {reconLoading ? "Auditing Files..." : "Run Autonomous Reconciliation"}
                   </button>
                 </div>
               </div>
 
-              {reconResult ? (
-                <div className="space-y-6">
-                  <div className="grid grid-cols-4 gap-4">
-                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-1">
-                      <span className="text-xs text-slate-400 uppercase font-semibold block">Total Invoices Reviewed</span>
-                      <span className="text-2xl font-bold font-mono text-white">{reconResult.summary.total_purchases_reviewed}</span>
-                    </div>
-                    <div className="bg-emerald-950/40 border border-emerald-800/60 p-4 rounded-xl space-y-1">
-                      <span className="text-xs text-emerald-400 uppercase font-semibold block">Matched &amp; Eligible ITC</span>
-                      <span className="text-2xl font-bold font-mono text-emerald-300">Rs. {reconResult.summary.total_eligible_itc.toLocaleString('en-IN')}</span>
-                      <span className="text-[10px] text-emerald-500 block">{reconResult.summary.matched_count} Invoices Safe to Claim</span>
-                    </div>
-                    <div className="bg-rose-950/40 border border-rose-800/60 p-4 rounded-xl space-y-1">
-                      <span className="text-xs text-rose-400 uppercase font-semibold block">Missing in 2B (At Risk)</span>
-                      <span className="text-2xl font-bold font-mono text-rose-300">Rs. {reconResult.summary.total_at_risk_itc.toLocaleString('en-IN')}</span>
-                      <span className="text-[10px] text-rose-400 block">{reconResult.summary.missing_in_2b_count} Defaulting Vendors</span>
-                    </div>
-                    <div className="bg-amber-950/40 border border-amber-800/60 p-4 rounded-xl space-y-1">
-                      <span className="text-xs text-amber-400 uppercase font-semibold block">Rate / Value Discrepancies</span>
-                      <span className="text-2xl font-bold font-mono text-amber-300">{reconResult.summary.mismatch_count}</span>
-                      <span className="text-[10px] text-amber-400 block">Requires Credit/Debit Note</span>
-                    </div>
+              {reconResult && (
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span className="text-xs text-slate-400 block">Total Reviewed</span>
+                    <span className="text-2xl font-bold font-mono text-white">{reconResult.summary.total_purchases_reviewed}</span>
                   </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <div>
-                        <h3 className="text-sm font-semibold text-rose-300 flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-rose-400"></span>
-                          Action Required: Vendor Invoices Missing in GSTR-2B
-                        </h3>
-                        <p className="text-xs text-slate-400">These vendors have not filed their GSTR-1. Under Sec 16(2)(aa), claiming this credit leads to tax demand notices.</p>
-                      </div>
-                      <span className="text-xs font-bold text-rose-400 bg-rose-950 border border-rose-800 px-2.5 py-1 rounded">
-                        HOLD VENDOR PAYMENT
-                      </span>
-                    </div>
-
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-mono">
-                        <tr>
-                          <th className="p-3">Vendor GSTIN</th>
-                          <th className="p-3">Vendor Name</th>
-                          <th className="p-3">Invoice No</th>
-                          <th className="p-3 text-right">Taxable (Rs.)</th>
-                          <th className="p-3 text-right">ITC at Risk (Rs.)</th>
-                          <th className="p-3">Statutory Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60">
-                        {reconResult.missing_in_2b.map((item, i) => (
-                          <tr key={i} className="hover:bg-slate-950/40 font-mono">
-                            <td className="p-3 text-slate-300">{item.vendor_gstin}</td>
-                            <td className="p-3 font-sans font-medium text-white">{item.vendor_name}</td>
-                            <td className="p-3 text-slate-300">{item.doc_number}</td>
-                            <td className="p-3 text-right text-slate-300">{item.taxable_value.toLocaleString('en-IN')}</td>
-                            <td className="p-3 text-right font-bold text-rose-400">{item.itc_at_risk.toLocaleString('en-IN')}</td>
-                            <td className="p-3 font-sans text-rose-300 text-[11px]">{item.action}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="bg-emerald-950/40 border border-emerald-800/60 p-4 rounded-xl">
+                    <span className="text-xs text-emerald-400 block">Matched &amp; Safe ITC</span>
+                    <span className="text-2xl font-bold font-mono text-emerald-300">Rs. {reconResult.summary.total_eligible_itc.toLocaleString('en-IN')}</span>
                   </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-4">
-                    <h3 className="text-sm font-semibold text-emerald-300 flex items-center gap-2 border-b border-slate-800 pb-3">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                      100% Matched &amp; Eligible for GSTR-3B Credit Claim
-                    </h3>
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-950 text-slate-400 border-b border-slate-800 font-mono">
-                        <tr>
-                          <th className="p-3">Vendor GSTIN</th>
-                          <th className="p-3">Vendor Name</th>
-                          <th className="p-3">Invoice No</th>
-                          <th className="p-3 text-right">Taxable (Rs.)</th>
-                          <th className="p-3 text-right">Eligible ITC (Rs.)</th>
-                          <th className="p-3">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60">
-                        {reconResult.matched.map((item, i) => (
-                          <tr key={i} className="hover:bg-slate-950/40 font-mono">
-                            <td className="p-3 text-slate-300">{item.vendor_gstin}</td>
-                            <td className="p-3 font-sans font-medium text-white">{item.vendor_name}</td>
-                            <td className="p-3 text-slate-300">{item.doc_number}</td>
-                            <td className="p-3 text-right text-slate-300">{item.taxable_value.toLocaleString('en-IN')}</td>
-                            <td className="p-3 text-right font-bold text-emerald-400">{item.itc_claimed.toLocaleString('en-IN')}</td>
-                            <td className="p-3 font-sans text-emerald-300 text-[11px]">{item.remarks}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="bg-rose-950/40 border border-rose-800/60 p-4 rounded-xl">
+                    <span className="text-xs text-rose-400 block">At Risk (Missing 2B)</span>
+                    <span className="text-2xl font-bold font-mono text-rose-300">Rs. {reconResult.summary.total_at_risk_itc.toLocaleString('en-IN')}</span>
                   </div>
-                </div>
-              ) : (
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-500 space-y-3">
-                  <div className="w-12 h-12 border border-dashed border-slate-700 rounded-full mx-auto flex items-center justify-center text-slate-400 font-bold">
-                    2B
+                  <div className="bg-amber-950/40 border border-amber-800/60 p-4 rounded-xl">
+                    <span className="text-xs text-amber-400 block">Rate Mismatches</span>
+                    <span className="text-2xl font-bold font-mono text-amber-300">{reconResult.summary.mismatch_count}</span>
                   </div>
-                  <h4 className="text-sm font-semibold text-slate-300">Ready for Live File Ingestion</h4>
-                  <p className="text-xs text-slate-400 max-w-md mx-auto">
-                    Drag and drop your client's purchase register and official GSTR-2B JSON file above, or click "Quick Demo Simulation" to test immediately.
-                  </p>
                 </div>
               )}
             </main>
           )}
 
-          {/* TAB 3: RULE 88D / DRC-01C AUTO-RESOLVER */}
+          {/* TAB 3: DRC-01C RESOLVER */}
           {activeTab === "drc01c" && (
             <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                   <div>
-                    <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                      <span className="text-amber-400">⚡</span>
-                      Rule 88D / Form GST DRC-01C Notice Resolver
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Automated statutory defense generator for ITC variances between GSTR-2B and GSTR-3B.
-                    </p>
+                    <h2 className="text-base font-semibold text-white">Rule 88D / Form GST DRC-01C Inward ITC Defense</h2>
+                    <p className="text-xs text-slate-400 mt-1">Resolve excess GSTR-3B vs. 2B claims within 7 days.</p>
                   </div>
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-800">
-                    7-Day Statutory Defense Window
-                  </span>
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">Section 16(2) Protected</span>
                 </div>
-
-                <form onSubmit={handleResolveDRC01C} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form onSubmit={handleResolveDRC01C} className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Notice Reference Number</label>
-                    <input
-                      type="text"
-                      value={drcRefNo}
-                      onChange={(e) => setDrcRefNo(e.target.value)}
-                      placeholder="e.g. ZD360926001882E"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
-                      required
-                    />
+                    <label className="block text-xs text-slate-400 mb-1">Notice Ref No.</label>
+                    <input type="text" value={drcRefNo} onChange={(e) => setDrcRefNo(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">Tax Period</label>
-                    <input
-                      type="text"
-                      value={drcPeriod}
-                      onChange={(e) => setDrcPeriod(e.target.value)}
-                      placeholder="e.g. 092026"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
-                      required
-                    />
+                    <label className="block text-xs text-slate-400 mb-1">Tax Period</label>
+                    <input type="text" value={drcPeriod} onChange={(e) => setDrcPeriod(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">GSTR-2B Available ITC (₹)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={drcItc2b}
-                      onChange={(e) => setDrcItc2b(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
-                      required
-                    />
+                    <label className="block text-xs text-slate-400 mb-1">GSTR-2B Available (Rs.)</label>
+                    <input type="number" step="0.01" value={drcItc2b} onChange={(e) => setDrcItc2b(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">GSTR-3B Availed ITC (₹)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={drcItc3b}
-                      onChange={(e) => setDrcItc3b(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-emerald-500 font-mono outline-none"
-                      required
-                    />
+                    <label className="block text-xs text-slate-400 mb-1">GSTR-3B Availed (Rs.)</label>
+                    <input type="number" step="0.01" value={drcItc3b} onChange={(e) => setDrcItc3b(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
                   </div>
-                  <div className="md:col-span-2 pt-2">
-                    <button
-                      type="submit"
-                      disabled={drcLoading}
-                      className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold py-2.5 px-4 rounded-lg shadow-lg shadow-emerald-500/20 transition disabled:opacity-50 text-sm cursor-pointer"
-                    >
-                      {drcLoading ? "Analyzing Statutory Precedents..." : "Generate Portal Part-B Legal Draft & Vendor Hold Directive"}
-                    </button>
-                  </div>
+                  <button type="submit" disabled={drcLoading} className="col-span-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-lg text-xs">
+                    {drcLoading ? "Generating..." : "Generate Part-B Statutory Defense"}
+                  </button>
                 </form>
 
                 {drcResult && (
-                  <div className="space-y-6 pt-4 border-t border-slate-800">
-                    {/* Variance Metrics Bar */}
-                    <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-4 pt-4 border-t border-slate-800">
+                    <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg">
+                      <span className="text-xs font-bold text-emerald-400 block mb-1">Form DRC-01C Part-B Legal Draft</span>
+                      <p className="text-xs text-slate-200 font-mono select-all leading-relaxed">{drcResult.part_b_reply}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </main>
+          )}
+
+          {/* TAB 4: DRC-01B RESOLVER */}
+          {activeTab === "drc01b" && (
+            <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-white">Rule 88C / Form GST DRC-01B Outward Liability Defense</h2>
+                    <p className="text-xs text-slate-400 mt-1">Statutory response for GSTR-1 outward tax exceeding GSTR-3B paid tax to prevent portal lockout.</p>
+                  </div>
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded bg-purple-950 text-purple-300 border border-purple-800">Rule 59(6) Lockout Shield</span>
+                </div>
+
+                <form onSubmit={handleResolveDRC01B} className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Notice Reference No.</label>
+                    <input type="text" value={drcbRefNo} onChange={(e) => setDrcbRefNo(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Tax Period</label>
+                    <input type="text" value={drcbPeriod} onChange={(e) => setDrcbPeriod(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">GSTR-1 Declared Liability (Rs.)</label>
+                    <input type="number" step="0.01" value={drcbTax1} onChange={(e) => setDrcbTax1(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">GSTR-3B Discharged Liability (Rs.)</label>
+                    <input type="number" step="0.01" value={drcbTax3b} onChange={(e) => setDrcbTax3b(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" required />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs text-slate-400 mb-1">Statutory Justification Reason Code</label>
+                    <select value={drcbReason} onChange={(e) => setDrcbReason(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200">
+                      <option value="TYPO_SUBSEQUENT_ADJUSTMENT">Typographical entry in GSTR-1; being adjusted in next period (Circular 170)</option>
+                      <option value="CANCELLED_EINVOICE">IRP auto-populated invoices subsequently cancelled before dispatch</option>
+                      <option value="ADVANCE_ADJUSTMENT">Tax paid on advance in prior period adjusted against current invoices</option>
+                    </select>
+                  </div>
+                  <button type="submit" disabled={drcbLoading} className="col-span-2 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded-lg text-xs">
+                    {drcbLoading ? "Generating..." : "Generate DRC-01B Part-B Legal Reply"}
+                  </button>
+                </form>
+
+                {drcbResult && (
+                  <div className="space-y-4 pt-4 border-t border-slate-800">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                        <span className="text-[10px] text-slate-400 uppercase block">Outward Delta Flagged</span>
+                        <span className="text-xl font-bold font-mono text-purple-400">Rs. {drcbResult.notice_summary.excess_outward_flagged.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg">
+                        <span className="text-[10px] text-slate-400 uppercase block">Compliance Status</span>
+                        <span className="text-xs font-bold text-emerald-400 block mt-1">{drcbResult.notice_summary.statutory_risk}</span>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg">
+                      <span className="text-xs font-bold text-purple-400 block mb-1">Form DRC-01B Part-B Official Legal Text</span>
+                      <p className="text-xs text-slate-200 font-mono select-all leading-relaxed">{drcbResult.part_b_legal_defense}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </main>
+          )}
+
+          {/* TAB 5: BANK STATEMENT & SFT AUDIT */}
+          {activeTab === "bank_audit" && (
+            <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl space-y-6">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                      <span>🏦</span>
+                      Statutory Bank Statement &amp; SFT Audit Analyzer
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Client-side audit for Section 269ST, Section 194N TDS, SFT reporting, and Section 68 unexplained credits. Files are parsed locally in memory.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={handleSimulateBankAudit} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs px-3 py-1.5 rounded-lg text-slate-200">
+                      Simulate Sample Statement
+                    </button>
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                      Local Sandbox
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Account Classification</label>
+                    <select value={bankAccountType} onChange={(e) => setBankAccountType(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200">
+                      <option value="Current">Current Account (SFT Limit: ₹50 Lakh)</option>
+                      <option value="Savings">Savings Account (SFT Limit: ₹10 Lakh)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Client ITR Filing Status (Sec 194N)</label>
+                    <select value={isItrNonFiler ? "non_filer" : "regular"} onChange={(e) => setIsItrNonFiler(e.target.value === "non_filer")} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200">
+                      <option value="regular">Regular Tax Return Filer (TDS above ₹1 Crore)</option>
+                      <option value="non_filer">Non-Filer 3 Years (TDS above ₹20 Lakh)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Sec 68 Large Credit Threshold (₹)</label>
+                    <input type="number" value={largeCreditThreshold} onChange={(e) => setLargeCreditThreshold(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono" />
+                  </div>
+                </div>
+
+                {/* Upload Zone */}
+                <div onClick={() => bankFileInputRef.current.click()} className="border-2 border-dashed border-amber-900/50 hover:border-amber-600 rounded-xl p-6 text-center cursor-pointer bg-slate-950/60 transition">
+                  <input ref={bankFileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleParseBankStatement(e.target.files[0])} className="hidden" />
+                  <p className="text-xs font-semibold text-slate-200">
+                    {bankFileName ? bankFileName : "Click or Drop Client Bank Statement (.xlsx / .csv)"}
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-1">Works with HDFC, ICICI, SBI, Axis, Kotak net banking exports</p>
+                </div>
+
+                {bankAuditSummary && (
+                  <div className="space-y-6 pt-2">
+                    {/* Top Metric Cards */}
+                    <div className="grid grid-cols-4 gap-4">
                       <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
-                        <span className="text-xs text-slate-400 uppercase font-semibold block">Notice Excess ITC Flagged</span>
-                        <span className="text-2xl font-bold font-mono text-rose-400">
-                          Rs. {drcResult.notice_summary.excess_difference.toLocaleString('en-IN')}
-                        </span>
+                        <span className="text-xs text-slate-400 block">Total Credits Processed</span>
+                        <span className="text-xl font-bold font-mono text-cyan-400">Rs. {bankAuditSummary.totalCredits.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
-                        <span className="text-xs text-slate-400 uppercase font-semibold block">Variance Percentage</span>
-                        <span className="text-2xl font-bold font-mono text-amber-300">
-                          {drcResult.notice_summary.variance_percentage}
-                        </span>
+                        <span className="text-xs text-slate-400 block">Total Debits</span>
+                        <span className="text-xl font-bold font-mono text-slate-200">Rs. {bankAuditSummary.totalDebits.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
-                        <span className="text-xs text-slate-400 uppercase font-semibold block">Legal Status</span>
-                        <span className="text-xs font-bold font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-2 py-1 rounded inline-block mt-1">
-                          PART-B DEFENSE READY
-                        </span>
+                        <span className="text-xs text-slate-400 block">Aggregate Cash Deposits</span>
+                        <span className="text-xl font-bold font-mono text-amber-400">Rs. {bankAuditSummary.cashDeposits.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl">
+                        <span className="text-xs text-slate-400 block">Aggregate Cash Withdrawals</span>
+                        <span className="text-xl font-bold font-mono text-rose-400">Rs. {bankAuditSummary.cashWithdrawals.toLocaleString('en-IN')}</span>
                       </div>
                     </div>
 
-                    {/* Part B Legal Draft */}
-                    <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
-                          Official Form DRC-01C Part-B Legal Reply (Copy &amp; Paste in GST Portal)
-                        </h3>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(drcResult.part_b_reply);
-                            alert("Copied Part-B Legal Text!");
-                          }}
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer"
-                        >
-                          📋 Copy Legal Reply
-                        </button>
+                    {/* Statutory Compliance Findings */}
+                    <div className="grid grid-cols-2 gap-4">
+                      {/* SFT Cash Rule */}
+                      <div className={`p-4 rounded-xl border ${bankAuditSummary.sftBreached ? 'bg-rose-950/30 border-rose-800/60' : 'bg-emerald-950/30 border-emerald-800/60'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-bold text-white uppercase">SFT Reporting Threshold (Rule 114E)</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${bankAuditSummary.sftBreached ? 'bg-rose-900 text-rose-200' : 'bg-emerald-900 text-emerald-200'}`}>
+                            {bankAuditSummary.sftBreached ? 'SFT REPORTABLE' : 'CLEAR'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          {bankAuditSummary.sftBreached
+                            ? `Total cash deposits (₹${bankAuditSummary.cashDeposits.toLocaleString('en-IN')}) exceed the ₹${(bankAuditSummary.sftThreshold/100000)} Lakh annual limit. This bank account is subject to automatic AIR/SFT submission to the Income Tax Department.`
+                            : `Cash deposits are within the statutory ₹${(bankAuditSummary.sftThreshold/100000)} Lakh threshold.`}
+                        </p>
                       </div>
-                      <div className="p-4 bg-slate-900 rounded-lg border border-slate-800 text-xs text-slate-200 font-mono leading-relaxed select-all">
-                        {drcResult.part_b_reply}
-                      </div>
-                    </div>
 
-                    {/* WhatsApp Vendor Directive */}
-                    <div className="bg-slate-950 border border-amber-900/40 rounded-xl p-5 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider">
-                          Automated WhatsApp Debit Hold Directive (Send to Defaulting Suppliers)
-                        </h3>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(drcResult.vendor_whatsapp_directive);
-                            alert("Copied WhatsApp Directive!");
-                          }}
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition cursor-pointer"
-                        >
-                          📲 Copy WhatsApp Draft
-                        </button>
+                      {/* Section 269ST Rule */}
+                      <div className={`p-4 rounded-xl border ${bankAuditSummary.sec269stBreached ? 'bg-rose-950/30 border-rose-800/60' : 'bg-emerald-950/30 border-emerald-800/60'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-bold text-white uppercase">Section 269ST Single-Day Cash Receipt</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${bankAuditSummary.sec269stBreached ? 'bg-rose-900 text-rose-200' : 'bg-emerald-900 text-emerald-200'}`}>
+                            {bankAuditSummary.sec269stBreached ? 'PENALTY RISK (SEC 271DA)' : 'CLEAR'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          {bankAuditSummary.sec269stBreached
+                            ? `${bankAuditSummary.singleDayHighCash.length} instance(s) detected with cash receipts ≥ ₹2,00,000 on a single day. Section 271DA levies a 100% penalty on the receiver.`
+                            : "No single-day cash transactions exceeded the ₹2 Lakh threshold."}
+                        </p>
                       </div>
-                      <div className="p-4 bg-slate-900 rounded-lg border border-slate-800 text-xs text-slate-300 font-mono whitespace-pre-wrap leading-relaxed select-all">
-                        {drcResult.vendor_whatsapp_directive}
+
+                      {/* Section 194N Cash Withdrawal TDS */}
+                      <div className={`p-4 rounded-xl border ${bankAuditSummary.sec194nBreached ? 'bg-amber-950/30 border-amber-800/60' : 'bg-emerald-950/30 border-emerald-800/60'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-bold text-white uppercase">Section 194N Cash Withdrawal TDS</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${bankAuditSummary.sec194nBreached ? 'bg-amber-900 text-amber-200' : 'bg-emerald-900 text-emerald-200'}`}>
+                            {bankAuditSummary.sec194nBreached ? 'TDS APPLICABLE' : 'CLEAR'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300">
+                          {bankAuditSummary.sec194nBreached
+                            ? `Withdrawals (₹${bankAuditSummary.cashWithdrawals.toLocaleString('en-IN')}) exceed the ₹${(bankAuditSummary.tds194nThreshold/100000)} Lakh threshold. Bank must deduct 2% to 5% TDS.`
+                            : `Cash withdrawals are within safe non-TDS limits.`}
+                        </p>
+                      </div>
+
+                      {/* Cheque & Inward Bounces */}
+                      <div className="p-4 rounded-xl border border-slate-800 bg-slate-950/50">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="text-xs font-bold text-white uppercase">Banking Health &amp; CMA Metrics</span>
+                          <span className="text-[10px] font-mono text-cyan-300 bg-slate-900 px-2 py-0.5 rounded">BANK RATING</span>
+                        </div>
+                        <div className="flex gap-4 text-xs font-mono">
+                          <div>Inward Bounces: <span className="font-bold text-amber-400">{bankAuditSummary.inwardBounces}</span></div>
+                          <div>Outward Bounces: <span className="font-bold text-rose-400">{bankAuditSummary.outwardBounces}</span></div>
+                        </div>
                       </div>
                     </div>
                   </div>
