@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: apextax-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: \
+      POSTGRES_PASSWORD: \
+      POSTGRES_DB: \
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \ -d \"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: apextax-redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass \
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "\", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apextax-api
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    networks:
+      - internal_network
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apextax-worker
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    networks:
+      - internal_network
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info -c 4
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  internal_network:
+    driver: bridge
