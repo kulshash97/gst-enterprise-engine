@@ -1,0 +1,127 @@
+{
+  "gstin": "36AAACG1234F1Z5",
+  "fp": "092026",
+  "version": "GSTR2B_v1.0",
+  "data": {
+    "docdata": {
+      "b2b": [
+        {
+          "ctin": "27AAACT2727Q1ZW",
+          "trdnm": "Tata Communications Ltd",
+          "supprtyp": "R",
+          "inv": [
+            {
+              "inum": "TCL/2026/0891",
+              "typ": "R",
+              "dt": "04-09-2026",
+              "val": 147500.0,
+              "pos": "36",
+              "rev": "N",
+              "itcavl": "Y",
+              "items": [
+                {
+                  "num": 1,
+                  "item_det": {
+                    "rt": 18.0,
+                    "txval": 125000.0,
+                    "iamt": 22500.0,
+                    "camt": 0.0,
+                    "samt": 0.0,
+                    "csamt": 0.0
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "29AAACS1234F1Z8",
+          "trdnm": "Schneider Electric India Pvt Ltd",
+          "supprtyp": "R",
+          "inv": [
+            {
+              "inum": "SE/BLR/9921",
+              "typ": "R",
+              "dt": "11-09-2026",
+              "val": 99120.0,
+              "pos": "36",
+              "rev": "N",
+              "itcavl": "Y",
+              "items": [
+                {
+                  "num": 1,
+                  "item_det": {
+                    "rt": 18.0,
+                    "txval": 84000.0,
+                    "iamt": 15120.0,
+                    "camt": 0.0,
+                    "samt": 0.0,
+                    "csamt": 0.0
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "27AAACG0567C1Z3",
+          "trdnm": "Godrej & Boyce Mfg Co Ltd",
+          "supprtyp": "R",
+          "inv": [
+            {
+              "inum": "GB-2026-4412",
+              "typ": "R",
+              "dt": "15-09-2026",
+              "val": 64900.0,
+              "pos": "36",
+              "rev": "N",
+              "itcavl": "Y",
+              "items": [
+                {
+                  "num": 1,
+                  "item_det": {
+                    "rt": 18.0,
+                    "txval": 55000.0,
+                    "iamt": 9900.0,
+                    "camt": 0.0,
+                    "samt": 0.0,
+                    "csamt": 0.0
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ctin": "29AAACD3321M1ZT",
+          "trdnm": "Dell International Services",
+          "supprtyp": "R",
+          "inv": [
+            {
+              "inum": "DELL/26/5001",
+              "typ": "R",
+              "dt": "25-09-2026",
+              "val": 70800.0,
+              "pos": "36",
+              "rev": "N",
+              "itcavl": "Y",
+              "items": [
+                {
+                  "num": 1,
+                  "item_det": {
+                    "rt": 18.0,
+                    "txval": 60000.0,
+                    "iamt": 10800.0,
+                    "camt": 0.0,
+                    "samt": 0.0,
+                    "csamt": 0.0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
