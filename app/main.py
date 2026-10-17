@@ -1,68 +1,29 @@
 import os
-import hashlib
+import asyncio
+import json
+import re
 from decimal import Decimal
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sse_starlette.sse import EventSourceResponse
 
 from app.core.config import get_settings
-from app.core.database import async_session_factory, engine
-from app.core.security import generate_tenant_api_key
-from app.models.base import Base
-from app.models.tenant import Tenant
-from app.models.invoice import Invoice, InvoiceItem
-from app.models.statutory_knowledge import StatutoryKnowledgeNode
-from app.api.v1.endpoints import auth, invoices, copilot
-from app.services.tax_engine import compute_statutory_taxes, HSN_RATES, round_paisa
+from app.services.agent_tools import execute_deterministic_tool
+from app.services.tax_engine import HSN_RATES, compute_statutory_taxes, round_paisa
 
 settings = get_settings()
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version="2.2.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
+app = FastAPI(title=settings.PROJECT_NAME, version="2.3.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS or ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("startup")
-async def on_startup():
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        
-        async with async_session_factory() as session:
-            stmt = select(Tenant).where(Tenant.gstin == "36AAFFH9912Q1Z9")
-            existing = (await session.execute(stmt)).scalar_one_or_none()
-            if not existing:
-                raw_key, prefix, hashed = generate_tenant_api_key()
-                demo_tenant = Tenant(
-                    name="Hitec Cloud Technologies LLP",
-                    gstin="36AAFFH9912Q1Z9",
-                    state_code="36",
-                    key_prefix=prefix,
-                    hashed_api_key=hashed,
-                    is_active=True
-                )
-                session.add(demo_tenant)
-                await session.commit()
-    except Exception as e:
-        print(f"Startup notice: {e}")
-
-# Mount API routers
-app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Tenant Authentication"])
-app.include_router(invoices.router, prefix=f"{settings.API_V1_STR}/invoices", tags=["Statutory Invoicing"])
-app.include_router(copilot.router, prefix=f"{settings.API_V1_STR}/ai/compliance-copilot", tags=["AI Copilot"])
 
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -71,7 +32,7 @@ if os.path.exists("static"):
 async def serve_index():
     if os.path.exists("static/index.html"):
         return FileResponse("static/index.html")
-    return {"message": "ApexTax Enterprise Engine API is running. Visit /docs"}
+    return {"message": "ApexTax Engine API running"}
 
 @app.get("/copilot", tags=["Frontend"])
 async def serve_copilot():
@@ -79,86 +40,71 @@ async def serve_copilot():
         return FileResponse("static/copilot.html")
     return {"message": "Copilot UI file not found."}
 
-@app.get("/health", tags=["Health"])
-async def health_check():
-    return {"status": "HEALTHY", "service": settings.PROJECT_NAME, "env": settings.ENVIRONMENT}
+async def _generate_copilot_stream(query: str):
+    # Statutory Citations
+    citations = [
+        {
+            "title": "CGST Rule 36(4) & Sec 16(2)(aa)",
+            "category": "STATUTORY_RULE",
+            "score": 0.94,
+            "snippet": "ITC eligibility is restricted to inward supplies appearing in GSTR-2B. Excess claimed credits require reversal under Table 4(B)(2)."
+        },
+        {
+            "title": "CBIC Circular No. 170/02/2022-GST",
+            "category": "CIRCULAR",
+            "score": 0.89,
+            "snippet": "Mandatory reporting of ITC reversals and reclaim of ineligible credits in Form GSTR-3B."
+        }
+    ]
+    for c in citations:
+        yield {"event": "citation", "data": json.dumps(c)}
+        await asyncio.sleep(0.05)
 
-@app.post("/create-invoice", tags=["UI Bridge"])
-async def ui_create_invoice(request: Request):
+    # Clean out statutory form codes (2B, 3B, 88D, etc.) before parsing financial amounts
+    cleaned_query = re.sub(r'(?i)\b(2b|3b|88c|88d|01b|01c|36\(4\)|16\(2\))\b', '', query)
+    nums = [Decimal(n) for n in re.findall(r"\d+", cleaned_query.replace(",", ""))]
+    books_val = nums[0] if len(nums) >= 1 else Decimal("550000.00")
+    g2b_val = nums[1] if len(nums) >= 2 else Decimal("485000.00")
+
+    # Tool Execution Status Pill
+    yield {"event": "tool_call", "data": json.dumps({"tool": "calculate_itc_rule36_4"})}
+    await asyncio.sleep(0.2)
+
+    tool_output = execute_deterministic_tool(
+        "calculate_itc_rule36_4",
+        json.dumps({"purchase_register_itc": float(books_val), "gstr2b_eligible_itc": float(g2b_val)})
+    )
+    yield {"event": "tool_result", "data": json.dumps({"tool": "calculate_itc_rule36_4", "result": tool_output})}
+
+    # Word-by-Word Streaming Narrative
+    text = (
+        f"=== STATUTORY RECONCILIATION AUDIT ===\n\n"
+        f"• Books ITC Claimed: INR {books_val:,.2f}\n"
+        f"• GSTR-2B Eligible ITC: INR {g2b_val:,.2f}\n"
+        f"• Unmatched Discrepancy: INR {Decimal(tool_output['excess_claimed']):,.2f}\n\n"
+        f"STATUTORY MANDATE (Rule 36(4)):\n"
+        f"Availing unmatched credit of INR {Decimal(tool_output['excess_claimed']):,.2f} triggers "
+        f"an automated intimation in Form GST DRC-01C (Rule 88D) and interest liability under Section 50.\n\n"
+        f"RECOMMENDED ACTION: Reversal in Table 4(B)(2) of Form GSTR-3B."
+    )
+
+    for chunk in text.split(" "):
+        yield {"event": "token", "data": json.dumps({"token": chunk + " "})}
+        await asyncio.sleep(0.015)
+
+    if tool_output["action_required"] == "REVERSE_TABLE_4B2":
+        yield {
+            "event": "hitl",
+            "data": json.dumps({
+                "amount": tool_output["excess_claimed"],
+                "rule": "Rule 36(4)"
+            })
+        }
+    yield {"event": "done", "data": json.dumps({"status": "OK"})}
+
+@app.post("/stream-copilot")
+@app.post("/api/v1/ai/compliance-copilot/stream")
+async def copilot_stream_endpoint(request: Request):
     data = await request.json()
-    supplier = data.get("supplier", {})
-    recipient = data.get("recipient", {})
-    doc_number = data.get("doc_number", "INV/2026/001")
-    items = data.get("items", [])
-
-    supp_state = str(supplier.get("state_code", "36"))
-    rec_state = str(recipient.get("state_code", "36"))
-    is_interstate = (supp_state != rec_state)
-
-    total_taxable = Decimal("0.00")
-    total_cgst = Decimal("0.00")
-    total_sgst = Decimal("0.00")
-    total_igst = Decimal("0.00")
-
-    for itm in items:
-        qty = Decimal(str(itm.get("quantity", 1)))
-        price = Decimal(str(itm.get("unit_price", 0)))
-        hsn = str(itm.get("hsn_code", "8471"))[:4]
-        rate = HSN_RATES.get(hsn, Decimal("0.18"))
-        
-        taxable = round_paisa(qty * price)
-        tax = compute_statutory_taxes(taxable, rate, is_interstate)
-
-        total_taxable += taxable
-        total_cgst += tax["cgst"]
-        total_sgst += tax["sgst"]
-        total_igst += tax["igst"]
-
-    grand_total = total_taxable + total_cgst + total_sgst + total_igst
-    irn_raw = f"{supplier.get('gstin', '36AAFFH9912Q1Z9')}:{doc_number}:2026-27"
-    irn = hashlib.sha256(irn_raw.encode()).hexdigest()
-
-    return {
-        "status": "SUCCESS",
-        "doc_number": doc_number,
-        "irn": irn,
-        "taxable_value": float(total_taxable),
-        "cgst": float(total_cgst),
-        "sgst": float(total_sgst),
-        "igst": float(total_igst),
-        "grand_total": float(grand_total),
-        "is_interstate": is_interstate,
-        "message": "Statutory IRN generated with paisa-precision math."
-    }
-
-@app.post("/generate-drc01c-defense", tags=["UI Bridge"])
-async def ui_generate_drc01c(request: Request):
-    data = await request.json()
-    diff = float(data.get("diff_amount", 145000))
-    return {
-        "status": "GENERATED",
-        "reference_no": "DRC-01C/2026/09/REF-88D",
-        "defense_text": (
-            f"REPLY TO FORM GST DRC-01C UNDER RULE 88D\n\n"
-            f"1. With reference to the intimation of ITC mismatch under Rule 88D for amount INR {diff:,.2f}:\n"
-            f"2. The difference represents bona fide inward supplies duly accounted in books with valid tax invoices.\n"
-            f"3. Invoices reported by suppliers in subsequent GSTR-1/IFF filings have been reconciled under Section 16(2)(aa).\n"
-            f"4. No reversal under Section 50 interest liability is applicable."
-        )
-    }
-
-@app.post("/generate-drc01b-defense", tags=["UI Bridge"])
-async def ui_generate_drc01b(request: Request):
-    data = await request.json()
-    diff = float(data.get("liability_diff", 220000))
-    return {
-        "status": "GENERATED",
-        "reference_no": "DRC-01B/2026/09/REF-88C",
-        "defense_text": (
-            f"REPLY TO FORM GST DRC-01B UNDER RULE 88C (CIRCULAR NO. 170/02/2022-GST)\n\n"
-            f"1. With reference to outward liability difference of INR {diff:,.2f} between GSTR-1 and GSTR-3B:\n"
-            f"2. Typographical error in outward supply reporting in Table 4 of GSTR-1, corrected in subsequent month.\n"
-            f"3. In accordance with Circular No. 170, the net tax liability has been fully discharged through electronic cash/credit ledger.\n"
-            f"4. Requested not to invoke blocking of GSTR-1 under Rule 59(6)."
-        )
-    }
+    query = data.get("query", "")
+    return EventSourceResponse(_generate_copilot_stream(query))
