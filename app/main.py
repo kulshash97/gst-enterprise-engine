@@ -14,14 +14,15 @@ from app.core.security import generate_tenant_api_key
 from app.models.base import Base
 from app.models.tenant import Tenant
 from app.models.invoice import Invoice, InvoiceItem
-from app.api.v1.endpoints import auth, invoices
+from app.models.statutory_knowledge import StatutoryKnowledgeNode
+from app.api.v1.endpoints import auth, invoices, copilot
 from app.services.tax_engine import compute_statutory_taxes, HSN_RATES, round_paisa
 
 settings = get_settings()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    version="2.0.0",
+    version="2.2.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -34,7 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Startup: initialize SQLite/Postgres tables and seed demo tenant
 @app.on_event("startup")
 async def on_startup():
     try:
@@ -62,8 +62,8 @@ async def on_startup():
 # Mount API routers
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Tenant Authentication"])
 app.include_router(invoices.router, prefix=f"{settings.API_V1_STR}/invoices", tags=["Statutory Invoicing"])
+app.include_router(copilot.router, prefix=f"{settings.API_V1_STR}/ai/compliance-copilot", tags=["AI Copilot"])
 
-# Mount static files
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -73,11 +73,16 @@ async def serve_index():
         return FileResponse("static/index.html")
     return {"message": "ApexTax Enterprise Engine API is running. Visit /docs"}
 
+@app.get("/copilot", tags=["Frontend"])
+async def serve_copilot():
+    if os.path.exists("static/copilot.html"):
+        return FileResponse("static/copilot.html")
+    return {"message": "Copilot UI file not found."}
+
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "HEALTHY", "service": settings.PROJECT_NAME, "env": settings.ENVIRONMENT}
 
-# Backward-compatible UI Invoicing endpoint
 @app.post("/create-invoice", tags=["UI Bridge"])
 async def ui_create_invoice(request: Request):
     data = await request.json()
@@ -126,7 +131,6 @@ async def ui_create_invoice(request: Request):
         "message": "Statutory IRN generated with paisa-precision math."
     }
 
-# Backward-compatible DRC-01C Generator
 @app.post("/generate-drc01c-defense", tags=["UI Bridge"])
 async def ui_generate_drc01c(request: Request):
     data = await request.json()
@@ -143,7 +147,6 @@ async def ui_generate_drc01c(request: Request):
         )
     }
 
-# Backward-compatible DRC-01B Generator
 @app.post("/generate-drc01b-defense", tags=["UI Bridge"])
 async def ui_generate_drc01b(request: Request):
     data = await request.json()
