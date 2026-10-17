@@ -8,8 +8,6 @@ Autonomous GST compliance, statutory reconciliations, and real-time AI Copilot e
 ---
 
 ## Architecture Overview
-## Architecture Overview
-
 ```mermaid
 flowchart TD
     subgraph Client [Client Browser]
