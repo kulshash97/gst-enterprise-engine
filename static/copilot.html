@@ -11,8 +11,7 @@
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden">
-  <!-- Navigation Header -->
-  <header class="h-16 border-b border-slate-800 bg-slate-900/60 flex items-center justify-between px-6 backdrop-blur">
+  <header class="h-16 border-b border-slate-800 bg-slate-900/60 flex items-center justify-between px-6">
     <div class="flex items-center space-x-3">
       <div class="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center font-bold text-lg text-white">A</div>
       <div>
@@ -26,132 +25,132 @@
     </div>
   </header>
 
-  <!-- Main Container -->
   <div class="flex flex-1 overflow-hidden">
-    <!-- Chat & Reasoning Panel -->
     <main class="flex-1 flex flex-col p-6 max-w-4xl mx-auto space-y-4">
       <div class="flex space-x-2">
-        <input id="queryInput" placeholder="Ask: 'Reconcile ITC: books claim 550000 but 2B shows 485000' or tax questions..." 
-               class="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition text-slate-200" />
+        <input id="queryInput" value="Reconcile ITC: books claim 550000 but 2B shows 485000" 
+               class="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500" />
         <button id="sendBtn" onclick="triggerStream()" class="bg-cyan-600 hover:bg-cyan-500 text-white font-medium px-6 py-3 rounded-xl text-sm transition">
           Execute Query
         </button>
       </div>
 
-      <!-- Live Tool Status Accordion -->
-      <div id="toolContainer" class="flex flex-wrap gap-2 empty:hidden"></div>
-
-      <!-- Real-time Token Output Stream -->
-      <div id="streamBox" class="flex-1 bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 font-mono text-sm leading-relaxed overflow-y-auto whitespace-pre-wrap text-slate-300">
-        Enter a prompt above to stream compliance reasoning, citations, and deterministic tool actions...
+      <div id="toolPill" class="hidden px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 rounded-full text-xs self-start">
+        ⚡ Running calculate_itc_rule36_4()...
       </div>
 
-      <!-- Human-In-The-Loop Action Proposal Block -->
-      <div id="hitlBox" class="hidden p-4 rounded-xl bg-amber-950/30 border border-amber-600/40 flex items-center justify-between">
+      <div id="outputBox" class="flex-1 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 font-mono text-sm leading-relaxed overflow-y-auto whitespace-pre-wrap text-slate-300">Click 'Execute Query' to start streaming...</div>
+
+      <div id="hitlCard" class="hidden p-4 rounded-xl bg-amber-950/30 border border-amber-600/40 flex items-center justify-between">
         <div class="space-y-1">
-          <div class="text-amber-400 font-semibold text-xs tracking-wide uppercase flex items-center space-x-1.5">
-            <span>⚠ Statutory Reversal Mandate Detected</span>
-          </div>
-          <p id="hitlMessage" class="text-xs text-slate-300"></p>
+          <div class="text-amber-400 font-semibold text-xs tracking-wide uppercase">⚠ Statutory Reversal Mandate Detected</div>
+          <p id="hitlDesc" class="text-xs text-slate-300"></p>
         </div>
-        <div class="flex space-x-2">
-          <button onclick="approveReversal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
-            Approve & Post to 3B
-          </button>
-          <button onclick="dismissHitl()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold">
-            Dismiss
-          </button>
-        </div>
+        <button onclick="alert('Posted reversal entry into Table 4(B)(2)!')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+          Approve & Post to 3B
+        </button>
       </div>
     </main>
 
-    <!-- Right Side Citations Drawer -->
     <aside class="w-80 border-l border-slate-800 bg-slate-900/20 p-5 flex flex-col space-y-4">
-      <div class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Statutory Grounding</div>
-      <div id="citationsList" class="flex-1 overflow-y-auto space-y-3 text-xs text-slate-400">
-        <p class="text-slate-600 text-xs">No active statutory citations retrieved yet.</p>
+      <div class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Statutory Citations</div>
+      <div id="citationsContainer" class="flex-1 overflow-y-auto space-y-3 text-xs text-slate-400">
+        <p class="text-slate-600">Retrieved statutory authorities will populate here.</p>
       </div>
     </aside>
   </div>
 
   <script>
     async function triggerStream() {
-      const query = document.getElementById('queryInput').value.trim();
-      if (!query) return;
+      var query = document.getElementById('queryInput').value;
+      var outBox = document.getElementById('outputBox');
+      var pill = document.getElementById('toolPill');
+      var hitl = document.getElementById('hitlCard');
+      var citeContainer = document.getElementById('citationsContainer');
+      var sendBtn = document.getElementById('sendBtn');
 
-      const streamBox = document.getElementById('streamBox');
-      const toolContainer = document.getElementById('toolContainer');
-      const citationsList = document.getElementById('citationsList');
-      const hitlBox = document.getElementById('hitlBox');
+      sendBtn.disabled = true;
+      sendBtn.innerText = "Processing...";
+      outBox.innerText = "";
+      citeContainer.innerText = "";
+      pill.classList.remove("hidden");
+      pill.className = "px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 rounded-full text-xs self-start animate-pulse";
+      pill.innerText = "⚡ Running calculate_itc_rule36_4()...";
+      hitl.classList.add("hidden");
 
-      streamBox.innerText = "";
-      toolContainer.innerHTML = "";
-      citationsList.innerHTML = "";
-      hitlBox.classList.add("hidden");
+      try {
+        var response = await fetch("/stream-copilot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query })
+        });
 
-      const response = await fetch("/api/v1/ai/compliance-copilot/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: query })
-      });
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder("utf-8");
+        var partial = "";
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        while (true) {
+          var { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() || "";
+          partial += decoder.decode(value, { stream: true });
+          var lines = partial.split("\n");
+          partial = lines.pop(); // keep uncompleted line in buffer
 
-        for (const ev of events) {
-          const matchEvent = ev.match(/event:\s*(.+)/);
-          const matchData = ev.match(/data:\s*(.+)/);
-          if (!matchEvent || !matchData) continue;
+          var currentEvent = "message";
 
-          const type = matchEvent[1].trim();
-          const payload = JSON.parse(matchData[1].trim());
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
 
-          if (type === "token") {
-            streamBox.innerText += payload.token;
-          } else if (type === "citation") {
-            const card = document.createElement("div");
-            card.className = "p-3 rounded-lg bg-slate-800/50 border border-slate-700/50 space-y-1";
-            card.innerHTML = <div class="font-bold text-cyan-400"> + payload.title + </div> +
-                             <div class="text-slate-500 text-[10px]"> + payload.category +  • Score  + payload.score + </div> +
-                             <div class="text-slate-400"> + payload.snippet + </div>;
-            citationsList.appendChild(card);
-          } else if (type === "tool_call") {
-            const pill = document.createElement("span");
-            pill.id = "tool-" + payload.tool;
-            pill.className = "px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 rounded-full text-xs animate-pulse";
-            pill.innerText = "⚡ " + payload.tool + "() running...";
-            toolContainer.appendChild(pill);
-          } else if (type === "tool_result") {
-            const pill = document.getElementById("tool-" + payload.tool);
-            if (pill) {
-              pill.className = "px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full text-xs";
-              pill.innerText = "✓ " + payload.tool + "() completed";
+            if (line.startsWith("event:")) {
+              currentEvent = line.substring(6).trim();
+            } else if (line.startsWith("data:")) {
+              var rawData = line.substring(5).trim();
+              try {
+                var payload = JSON.parse(rawData);
+
+                if (currentEvent === "citation") {
+                  var card = document.createElement("div");
+                  card.className = "p-3 rounded-lg bg-slate-800/60 border border-slate-700/60 space-y-1";
+
+                  var t = document.createElement("div");
+                  t.className = "font-bold text-cyan-400";
+                  t.textContent = payload.title;
+
+                  var s = document.createElement("div");
+                  s.className = "text-slate-400 text-xs leading-normal";
+                  s.textContent = payload.snippet;
+
+                  card.appendChild(t);
+                  card.appendChild(s);
+                  citeContainer.appendChild(card);
+                } else if (currentEvent === "tool_result") {
+                  pill.className = "px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full text-xs self-start";
+                  pill.innerText = "✓ calculate_itc_rule36_4() completed";
+                } else if (currentEvent === "token") {
+                  outBox.innerText += payload.token;
+                  outBox.scrollTop = outBox.scrollHeight;
+                } else if (currentEvent === "hitl") {
+                  hitl.classList.remove("hidden");
+                  document.getElementById("hitlDesc").innerText = "Mandatory reversal of INR " + Number(payload.amount).toLocaleString('en-IN') + " required under " + payload.rule + " in GSTR-3B Table 4(B)(2).";
+                }
+              } catch (e) {
+                // Ignore raw non-JSON pings
+              }
             }
-          } else if (type === "hitl_action_proposal") {
-            hitlBox.classList.remove("hidden");
-            document.getElementById("hitlMessage").innerText = 
-              "Mandatory reversal of ₹" + payload.reversal_amount + " required under " + payload.statutory_mandate + " in " + payload.target_form + ".";
           }
         }
+      } catch (err) {
+        outBox.innerText = "Error during stream: " + err.message;
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Execute Query";
       }
-    }
-
-    function approveReversal() {
-      alert("Statutory reversal entry posted to GSTR-3B Table 4(B)(2) draft ledger!");
-      dismissHitl();
-    }
-
-    function dismissHitl() {
-      document.getElementById('hitlBox').classList.add("hidden");
     }
   </script>
 </body>
