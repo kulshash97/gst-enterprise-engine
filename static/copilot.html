@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ApexTax Copilot | Autonomous Statutory Intelligence</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden">
+  <header class="h-16 border-b border-slate-800 bg-slate-900/60 flex items-center justify-between px-6">
+    <div class="flex items-center space-x-3">
+      <div class="w-8 h-8 rounded-lg bg-cyan-600 flex items-center justify-center font-bold text-lg text-white">A</div>
+      <div>
+        <h1 class="text-sm font-bold text-white tracking-wide">ApexTax Enterprise Copilot</h1>
+        <p class="text-xs text-slate-400">Rule 36(4) Audit, ITC Matching & Statutory Grounding</p>
+      </div>
+    </div>
+    <div class="flex items-center space-x-4">
+      <a href="/" class="text-xs text-slate-400 hover:text-white transition">← Standard Invoicing</a>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">SSE Active</span>
+    </div>
+  </header>
+
+  <div class="flex flex-1 overflow-hidden">
+    <main class="flex-1 flex flex-col p-6 max-w-4xl mx-auto space-y-4">
+      <div class="flex space-x-2">
+        <input id="queryInput" value="Reconcile ITC: books claim 550000 but 2B shows 485000" 
+               class="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500" />
+        <button id="sendBtn" onclick="triggerStream()" class="bg-cyan-600 hover:bg-cyan-500 text-white font-medium px-6 py-3 rounded-xl text-sm transition">
+          Execute Query
+        </button>
+      </div>
+
+      <div id="toolPill" class="hidden px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 rounded-full text-xs self-start">
+        ⚡ Running calculate_itc_rule36_4()...
+      </div>
+
+      <div id="outputBox" class="flex-1 bg-slate-900/40 border border-slate-800 rounded-2xl p-6 font-mono text-sm leading-relaxed overflow-y-auto whitespace-pre-wrap text-slate-300">Click 'Execute Query' to start streaming...</div>
+
+      <div id="hitlCard" class="hidden p-4 rounded-xl bg-amber-950/30 border border-amber-600/40 flex items-center justify-between">
+        <div class="space-y-1">
+          <div class="text-amber-400 font-semibold text-xs tracking-wide uppercase">⚠ Statutory Reversal Mandate Detected</div>
+          <p id="hitlDesc" class="text-xs text-slate-300"></p>
+        </div>
+        <button onclick="alert('Posted reversal entry into Table 4(B)(2)!')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold">
+          Approve & Post to 3B
+        </button>
+      </div>
+    </main>
+
+    <aside class="w-80 border-l border-slate-800 bg-slate-900/20 p-5 flex flex-col space-y-4">
+      <div class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Statutory Citations</div>
+      <div id="citationsContainer" class="flex-1 overflow-y-auto space-y-3 text-xs text-slate-400">
+        <p class="text-slate-600">Retrieved statutory authorities will populate here.</p>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    async function triggerStream() {
+      var query = document.getElementById('queryInput').value;
+      var outBox = document.getElementById('outputBox');
+      var pill = document.getElementById('toolPill');
+      var hitl = document.getElementById('hitlCard');
+      var citeContainer = document.getElementById('citationsContainer');
+      var sendBtn = document.getElementById('sendBtn');
+
+      sendBtn.disabled = true;
+      sendBtn.innerText = "Processing...";
+      outBox.innerText = "";
+      citeContainer.innerText = "";
+      pill.classList.remove("hidden");
+      pill.className = "px-3 py-1 bg-yellow-500/10 text-yellow-400 border border-yellow-500/30 rounded-full text-xs self-start animate-pulse";
+      pill.innerText = "⚡ Running calculate_itc_rule36_4()...";
+      hitl.classList.add("hidden");
+
+      try {
+        var response = await fetch("/stream-copilot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query })
+        });
+
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
+
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder("utf-8");
+        var partial = "";
+
+        while (true) {
+          var { done, value } = await reader.read();
+          if (done) break;
+
+          partial += decoder.decode(value, { stream: true });
+          var lines = partial.split("\n");
+          partial = lines.pop(); // keep uncompleted line in buffer
+
+          var currentEvent = "message";
+
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+
+            if (line.startsWith("event:")) {
+              currentEvent = line.substring(6).trim();
+            } else if (line.startsWith("data:")) {
+              var rawData = line.substring(5).trim();
+              try {
+                var payload = JSON.parse(rawData);
+
+                if (currentEvent === "citation") {
+                  var card = document.createElement("div");
+                  card.className = "p-3 rounded-lg bg-slate-800/60 border border-slate-700/60 space-y-1";
+
+                  var t = document.createElement("div");
+                  t.className = "font-bold text-cyan-400";
+                  t.textContent = payload.title;
+
+                  var s = document.createElement("div");
+                  s.className = "text-slate-400 text-xs leading-normal";
+                  s.textContent = payload.snippet;
+
+                  card.appendChild(t);
+                  card.appendChild(s);
+                  citeContainer.appendChild(card);
+                } else if (currentEvent === "tool_result") {
+                  pill.className = "px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full text-xs self-start";
+                  pill.innerText = "✓ calculate_itc_rule36_4() completed";
+                } else if (currentEvent === "token") {
+                  outBox.innerText += payload.token;
+                  outBox.scrollTop = outBox.scrollHeight;
+                } else if (currentEvent === "hitl") {
+                  hitl.classList.remove("hidden");
+                  document.getElementById("hitlDesc").innerText = "Mandatory reversal of INR " + Number(payload.amount).toLocaleString('en-IN') + " required under " + payload.rule + " in GSTR-3B Table 4(B)(2).";
+                }
+              } catch (e) {
+                // Ignore raw non-JSON pings
+              }
+            }
+          }
+        }
+      } catch (err) {
+        outBox.innerText = "Error during stream: " + err.message;
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Execute Query";
+      }
+    }
+  </script>
+</body>
+</html>
