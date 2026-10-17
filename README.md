@@ -8,26 +8,33 @@ Autonomous GST compliance, statutory reconciliations, and real-time AI Copilot e
 ---
 
 ## Architecture Overview
-┌──────────────────────────────────────────────┐
-                  │              Client Browser                  │
-                  │  - Invoicing UI (React 18)                   │
-                  │  - Statutory Copilot (SSE Reader + Tailwind) │
-                  └──────────────────────▲───────────────────────┘
-                                         │ HTTP / SSE Stream
-                                         ▼
-                  ┌──────────────────────────────────────────────┐
-                  │          FastAPI ASGI Server (Uvicorn)       │
-                  │  - /api/v1/invoices (NIC INV-01 E-Invoice)   │
-                  │  - /stream-copilot (EventSourceResponse)     │
-                  └──────────────┬────────────────┬──────────────┘
-                                 │                │
-        ┌────────────────────────┴───┐        ┌───┴────────────────────────┐
-        ▼                            ▼        ▼                            ▼
-┌───────────────────────┐  ┌───────────────────┐  ┌─────────────────────────┐  ┌───────────────────────┐
-│ Invoicing & Tax Core  │  │ Rule 36(4) Engine │  │ Statutory Knowledge RAG │  │ Human-in-the-Loop     │
-│ HSN Precision Math    │  │ GSTR-2B vs Books  │  │ CGST Rules & CBIC       │  │ Reversal Action Cards │
-│ (round_paisa)         │  │ Discrepancy Calc  │  │ Circular Citations      │  │ Table 4(B)(2) 3B Post │
-└───────────────────────┘  └───────────────────┘  └─────────────────────────┘  └───────────────────────┘
+## Architecture Overview
+
+```mermaid
+flowchart TD
+    subgraph Client [Client Browser]
+        UI[Invoicing UI - React 18]
+        Copilot[Statutory Copilot - SSE Stream]
+    end
+
+    subgraph Server [FastAPI ASGI Server]
+        API_Inv["/api/v1/invoices (NIC INV-01)"]
+        API_SSE["/stream-copilot (EventSource)"]
+    end
+
+    subgraph Core [Compliance & AI Engines]
+        TaxCore[Invoicing & Tax Core<br/>HSN Precision Math]
+        Rule36[Rule 36-4 Engine<br/>2B vs Books Matching]
+        RAG[Statutory Knowledge RAG<br/>Rules & Circular Citations]
+        HITL[Human-in-the-Loop<br/>Table 4-B-2 Reversal Card]
+    end
+
+    Client <-->|HTTP / SSE Stream| Server
+    API_Inv --> TaxCore
+    API_SSE --> Rule36
+    API_SSE --> RAG
+    Rule36 --> HITL
+```
 ## Core Capabilities
 
 1. **Autonomous GST Invoicing**: NIC INV-01 compliant payload generation with automated interstate/intrastate classification and financial rounding precision (`NUMERIC(15,2)` / `round_paisa`).
